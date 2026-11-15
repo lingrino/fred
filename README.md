@@ -7,8 +7,8 @@ latency.
 
 | Keys | Does |
 |---|---|
-| **⌥Space** | Launcher: apps, System Settings panes, Chrome bookmarks, contacts, system commands, calculator |
-| **⌥⇧C** | Clipboard history (text, images, files; 90 days) |
+| **⌘Space** | Launcher: apps, System Settings panes, Chrome bookmarks, contacts, system commands, calculator |
+| **⌘⇧C** | Clipboard history (text, images, files; 90 days) |
 | ↩ | Open the selected result (row 1 by default) / paste the selected clip |
 | ⌘1 … ⌘5 | Open result n (clipboard: ⌘1…⌘9) |
 | ↑ ↓ / ⌃P ⌃N | Move selection |
@@ -18,13 +18,12 @@ latency.
 | Esc | Back / close |
 
 - Type math (`2+2`, `(1200*3)/4`, `sqrt(2)`, `5!`) for an inline result; ↩ copies it.
-- Commands: Empty Trash, Sleep, Lock Screen, Restart, Shut Down, Force Quit…, Quit Fred,
+- Commands: Empty Trash, Sleep, Lock, Restart, Shut Down, Force Quit…, Quit Fred,
   Restart Fred (keywords like `emptytrash`, `shutdown`, `forcequit` work too).
 - Fred learns from what you pick: typing "f" ranks the app you usually open for "f" first.
 
-Hotkeys are ⌥Space / ⌥⇧C. To switch to ⌘Space / ⌘⇧C: turn Spotlight's
-hotkeys off, change `launcherKey`/`clipboardKey` in
-`Sources/Fred/AppDelegate.swift` to `cmdKey`, and `make install` — or just ask Claude.
+Hotkeys are ⌘Space / ⌘⇧C. Only one app can hold a hotkey: if another app grabs them
+first, Fred keeps retrying and takes over as soon as they're free.
 
 ## Build
 

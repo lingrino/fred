@@ -95,6 +95,7 @@ final class ControlServer: @unchecked Sendable {
             \(app.clipboard?.statsLine ?? "clipboard: off")
             memory: \(residentMB()) MB resident
             login item: \(LoginItem.statusLine)
+            hotkeys: launcher \(HotKeys.status.first ?? "-"), clipboard \(HotKeys.status.dropFirst().first ?? "-")
             """
         case "permissions": return Permissions.report()
         case "request": Permissions.requestMissing(); return Permissions.report()
@@ -161,6 +162,8 @@ final class ControlServer: @unchecked Sendable {
         case "resetstats":
             for x in [l.searchLatency, l.keystrokeLatency, l.stOS, l.stDeliver, l.stAppKit, l.stDispatch, l.stRowsRender, l.stResize, l.stDraw, l.stDisplay, l.stFlush, l.showLatency, QueryField.renderCost, QueryField.relayoutCost, QueryField.blinkCost, QueryField.replaceCost] { x.reset() }
             return "ok"
+        case "glassbench":
+            return GlassBench.run()
         case "shadow":
             l.panel.hasShadow = arg != "off"; return "shadow \(l.panel.hasShadow)"
         case "dryrun": Actions.dryRun = arg != "off"; return "dryrun \(Actions.dryRun)"

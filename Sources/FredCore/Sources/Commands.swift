@@ -15,7 +15,7 @@ public enum Command: String, CaseIterable, Sendable {
         switch self {
         case .emptyTrash: "Empty Trash"
         case .sleep: "Sleep"
-        case .lock: "Lock Screen"
+        case .lock: "Lock"
         case .restart: "Restart"
         case .shutDown: "Shut Down"
         case .forceQuit: "Force Quit…"
@@ -42,6 +42,7 @@ public enum Command: String, CaseIterable, Sendable {
         case .shutDown: ["Power Off"]
         case .forceQuit: ["Kill"]
         case .restartFred: ["Reload Fred"]
+        case .lock: ["Lock Screen"]
         default: []
         }
     }

@@ -14,9 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var clipboard: ClipboardController?
     private var activity: NSObjectProtocol?
 
-    /// ⌥Space launcher, ⌥⇧C clipboard.
-    static let launcherKey = (code: kVK_Space, mods: optionKey)
-    static let clipboardKey = (code: kVK_ANSI_C, mods: optionKey | shiftKey)
+    /// ⌘Space launcher, ⌘⇧C clipboard.
+    static let launcherKey = (code: kVK_Space, mods: cmdKey)
+    static let clipboardKey = (code: kVK_ANSI_C, mods: cmdKey | shiftKey)
 
     /// Picks up a grant given while Fred is running (no OS notification exists for
     /// that): when a source is still empty and its permission now checks out, reindex.

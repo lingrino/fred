@@ -7,21 +7,22 @@ preferences UI and there should not be one.
 
 ## What it does (and deliberately doesn't)
 
-- **Launcher** (⌥Space for now; ⌘Space later — see "Hotkeys"): one ranked list (max 5
+- **Launcher** (⌘Space): one ranked list (max 5
   rows) over apps, System Settings panes, system commands, Chrome bookmarks, contacts.
   Inline calculator ("2+2"). Learns from picks (zoxide/Firefox-style). Enter = row 1 /
   selected row, ⌘1…⌘5 = row n, ↑↓/⌃N⌃P move, Esc closes, ⌘↩ reveals an app in Finder.
   Contact → card of phones/emails (Enter copies, ⌘O opens Contacts.app).
   "Force Quit…" → running-app list.
-- **Clipboard history** (⌥⇧C): text, images, file lists; 90 days; token-AND substring
+- **Clipboard history** (⌘⇧C): text, images, file lists; 90 days; token-AND substring
   search; Enter pastes into the frontmost app, ⌘↩ copies only, ⌘⌫ deletes, ⌘1…⌘9.
 - **Not** in scope (user said so): file search/indexing, snippets, web search fallbacks,
   music, dictionary, password managers, workflows. Don't add them unless asked.
 
 ## User decisions (2026-11-14, kickoff)
 
-- Hotkeys ⌥Space / ⌥⇧C for now; the user moves Fred to ⌘Space / ⌘⇧C when ready (then
-  change `AppDelegate.launcherKey`).
+- Hotkeys ⌘Space / ⌘⇧C (`AppDelegate.launcherKey`/`clipboardKey`; ⌥Space / ⌥⇧C until
+  2026-11-15). A combination belongs to one app: if another app holds it, Fred retries
+  every 2 s (`fredctl stats` → hotkeys).
 - Clipboard pick pastes into the front app. Contact pick shows a card in Fred.
 - macOS 27.2 is the minimum OS forever; high-end Apple Silicon only. Use RAM/cores freely.
 - Stop and ask the user only for one-way doors or things only they can do (privacy grants).

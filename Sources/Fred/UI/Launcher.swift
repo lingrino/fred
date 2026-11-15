@@ -52,7 +52,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
         super.init()
         field.frame = NSRect(x: 22, y: (Theme.fieldHeight - 40) / 2, width: Theme.width - 44, height: 40)
         field.delegate = self
-        field.placeholder = "Fred"
+        field.placeholder = ""
         panel.content.addSubview(field)
         list.frame.origin = NSPoint(x: 0, y: Theme.fieldHeight)
         panel.content.addSubview(list)
@@ -84,7 +84,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
         engine.prepareLearning()
         mode = .search
         field.text = ""
-        field.placeholder = "Fred"
+        field.placeholder = ""
         render([], [])
         let t1 = nowNanos()
         panel.position(height: height())
@@ -228,7 +228,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
             case .search: hide()
             case .contact, .forceQuit:
                 mode = .search
-                field.placeholder = "Fred"
+                field.placeholder = ""
                 queryChanged()
             }
         case .pageUp, .pageDown, .tab: break
