@@ -42,7 +42,49 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
 
     // MARK: Monitoring
 
+    /// Row thumbnails for image clips and single image-file clips, by content hash.
+    /// Built off-main at launch and at capture; rows never decode images.
+    private var thumbs: [UInt64: CGImage] = [:]
+    nonisolated static let thumbPx = 64
+
+    nonisolated static func thumbnail(url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: thumbPx,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ] as CFDictionary)
+    }
+
+    /// Generates thumbnails for every image clip in history (parallel, background).
+    func buildThumbnails() {
+        var jobs: [(UInt64, URL)] = []
+        for i in 0..<store.count {
+            switch store.kind[i] {
+            case .image: if let u = store.imageURL(store.hash[i]) { jobs.append((store.hash[i], u)) }
+            case .files:
+                if let p = ClipPreview.singleImageFile(store.text(i)) { jobs.append((store.hash[i], URL(fileURLWithPath: p))) }
+            case .text: break
+            }
+        }
+        let todo = jobs
+        DispatchQueue.global(qos: .utility).async {
+            final class Out: @unchecked Sendable {
+                var v: [CGImage?]
+                init(_ n: Int) { v = Array(repeating: nil, count: n) }
+            }
+            let out = Out(todo.count)
+            DispatchQueue.concurrentPerform(iterations: todo.count) { k in out.v[k] = Self.thumbnail(url: todo[k].1) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    for (k, job) in todo.enumerated() { if let t = out.v[k] { self.thumbs[job.0] = t } }
+                }
+            }
+        }
+    }
+
     func startMonitoring() {
+        buildThumbnails()
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
@@ -76,7 +118,14 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
             guard !urls.isEmpty else { return }
             let text = urls.map(\.path).joined(separator: "\n")
-            store.add(kind: .files, text: text, hash: ClipStore.hash(text, kind: .files), app: source, time: now)
+            let h = ClipStore.hash(text, kind: .files)
+            store.add(kind: .files, text: text, hash: h, app: source, time: now)
+            if thumbs[h] == nil, let p = ClipPreview.singleImageFile(text) {
+                io.async { [weak self] in
+                    guard let t = Self.thumbnail(url: URL(fileURLWithPath: p)) else { return }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.thumbs[h] = t } }
+                }
+            }
             return
         }
         let hasString = types.contains(.string)
@@ -90,8 +139,10 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
                 guard let (png, w, hgt) = Self.pngAndSize(data, type: type) else { return }
                 let url = self.store.imagesDir!.appendingPathComponent(String(format: "%016llx.png", h))
                 if !FileManager.default.fileExists(atPath: url.path) { try? png.write(to: url) }
+                let thumb = Self.thumbnail(url: url)
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
+                        if let thumb { self.thumbs[h] = thumb }
                         self.store.add(kind: .image, text: "Image \(w)×\(hgt)", hash: h, app: source, time: now)
                     }
                 }
@@ -183,7 +234,8 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         var rows: [ResultList.Row] = []
         let now = UInt32(Date().timeIntervalSince1970)
         for r in results[offset..<end] {
-            rows.append(.init(title: title(r), detail: ago(now, store.time[r]), icon: .atlas(icon(r))))
+            let ic: ResultList.Icon = thumbs[store.hash[r]].map { .image($0) } ?? .atlas(icon(r))
+            rows.append(.init(title: title(r), detail: ago(now, store.time[r]), icon: ic))
         }
         list.set(rows, selected: selected - offset)
         preview.show(results.isEmpty ? nil : results[selected], store: store, engine: engine)
