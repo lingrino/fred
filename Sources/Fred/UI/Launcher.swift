@@ -225,8 +225,8 @@ final class Launcher: NSObject, QueryFieldDelegate {
         case .commandEnter: activate(list.selected, modifiers: .command)
         case .escape:
             switch mode {
-            case .search: hide()
-            case .contact, .forceQuit:
+            case .search, .contact: hide()
+            case .forceQuit:
                 mode = .search
                 field.placeholder = ""
                 queryChanged()
@@ -247,6 +247,13 @@ final class Launcher: NSObject, QueryFieldDelegate {
         if e.charactersIgnoringModifiers == "o", case .contact(let card) = mode {
             hide()
             Actions.open(url: "addressbook://" + card.identifier)
+            return true
+        }
+        // ⌘C on a contact card: copy the selected field's value (not the query text) and close.
+        if e.charactersIgnoringModifiers == "c", mods == .command, case .contact = mode,
+           list.selected < refs.count, case .field(let f) = refs[list.selected] {
+            hide()
+            Actions.copy(f.value)
             return true
         }
         return false
@@ -287,8 +294,11 @@ final class Launcher: NSObject, QueryFieldDelegate {
                 Actions.run(c)
             }
         case .field(let f):
+            // Like clipboard history: put the value on the pasteboard and paste it into
+            // the app you were in (still frontmost — the panel never activated Fred).
             hide()
             Actions.copy(f.value)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { Actions.postPaste() }
         case .process(let app):
             hide()
             if !Actions.dryRun { app.forceTerminate() } else { Log.info("dry run: force quit \(app.localizedName ?? "?")") }

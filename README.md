@@ -14,8 +14,8 @@ latency.
 | ↑ ↓ / ⌃P ⌃N | Move selection |
 | ⌘↩ | Launcher: reveal app in Finder · Clipboard: copy without pasting |
 | ⌘⌫ | Clipboard: delete the selected clip |
-| ⌘O | Contact card: open in Contacts.app |
-| Esc | Back / close |
+| ↩ / ⌘C / ⌘O | Contact card: paste the field into your app / copy it / open Contacts.app |
+| Esc | Close (Force Quit list: back to search) |
 
 - Type math (`2+2`, `(1200*3)/4`, `sqrt(2)`, `5!`) for an inline result; ↩ copies it.
 - Commands: Empty Trash, Sleep, Lock, Restart, Shut Down, Force Quit…, Quit Fred,
