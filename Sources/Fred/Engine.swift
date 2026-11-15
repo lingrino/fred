@@ -15,6 +15,8 @@ final class Engine {
     private var pendingPanes: [SettingsScanner.Pane] = []
     var onAtlas: ((IconAtlas) -> Void)?
     var onTitles: ((TitleAtlas?) -> Void)?
+    /// Fires after every catalog swap (main thread).
+    var onCatalogChanged: (() -> Void)?
     /// Pre-rendered catalog titles; nil while (re)building — rows then rasterize.
     private(set) var titles: TitleAtlas?
     static let titleMaxWidth = Theme.width - (Theme.rowInset + 10 + Theme.iconSize + 12) - Theme.rowInset - 14
@@ -82,6 +84,7 @@ final class Engine {
                         self.atlas = a
                         self.mapIcons()
                         self.onAtlas?(a)
+                        self.onCatalogChanged?()   // rows pick up real icons
                         self.onReady?()
                         self.onReady = nil
                     }
@@ -89,6 +92,7 @@ final class Engine {
             }
         }
         mapIcons()
+        onCatalogChanged?()
     }
 
     private func mapIcons() {

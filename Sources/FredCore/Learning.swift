@@ -47,7 +47,7 @@ public final class Learning {
         if let url = logURL {
             let l = EventLog(url: url)
             log = l
-            for e in l.readAll() { apply(e) }
+            for e in l.loaded { apply(e) }
             prune(now: UInt32(Date().timeIntervalSince1970))
         } else {
             log = nil
@@ -127,7 +127,10 @@ public final class Learning {
         guard !u.isEmpty else { return }
         // Association part: rows whose query starts with u, per-item max.
         let pu = PackedQuery(u)
-        var lo = lowerBoundQ(pu.lowerPad), hi = lowerBoundQ(pu.upperPad)
+        // Rows whose query starts with u lie in [u+00…, u+FF…). A full 32-byte u has no
+        // room for padding: its only "extensions" are rows equal to it.
+        var lo = lowerBoundQ(pu.lowerPad)
+        var hi = pu.len >= 32 ? range(of: pu).upperBound : lowerBoundQ(pu.upperPad)
         if hi < lo { hi = lo }
         // Small inline accumulation: (item, best A) — few rows match a given prefix.
         var bestItem = InlineArray<16, Int32>(repeating: -1)
@@ -150,6 +153,12 @@ public final class Learning {
             while k < nBest && bestItem[k] != Int32(item) { k += 1 }
             if k < nBest { if a > bestA[k] { bestA[k] = a } }
             else if nBest < 16 { bestItem[nBest] = Int32(item); bestA[nBest] = a; nBest += 1 }
+            else {
+                // Full: replace the weakest so the 16 strongest associations survive.
+                var w = 0
+                for j in 1..<16 where bestA[j] < bestA[w] { w = j }
+                if a > bestA[w] { bestItem[w] = Int32(item); bestA[w] = a }
+            }
         }
         for k in 0..<nBest { s.addBoost(item: Int(bestItem[k]), Int32(50 * bestA[k])) }
         if exTopItem >= 0 && exTop >= 2.4 && exTop >= 2 * exSecond { s.latch = Int(exTopItem) }
@@ -262,6 +271,9 @@ final class EventLog {
     private var handle: FileHandle?
     static let magic: [UInt8] = Array("FRDL".utf8) + [1, 0, 0, 0]
 
+    /// Events read at open (the file's valid prefix).
+    private(set) var loaded: [Learning.Event] = []
+
     init(url: URL) {
         self.url = url
         let fm = FileManager.default
@@ -269,7 +281,12 @@ final class EventLog {
         if !fm.fileExists(atPath: url.path) {
             fm.createFile(atPath: url.path, contents: Data(Self.magic))
         }
+        let (events, goodEnd, size) = Self.read(url)
+        loaded = events
         handle = try? FileHandle(forWritingTo: url)
+        // A torn tail (crash or full disk mid-append) must be cut off before appending,
+        // or every later record would be misparsed behind it.
+        if goodEnd < size { try? handle?.truncate(atOffset: UInt64(goodEnd)) }
         _ = try? handle?.seekToEnd()
     }
 
@@ -285,10 +302,19 @@ final class EventLog {
 
     func flush() { try? handle?.synchronize() }
 
-    func readAll() -> [Learning.Event] {
-        guard let data = try? Data(contentsOf: url), data.count >= 8,
-              Array(data.prefix(4)) == Array(Self.magic.prefix(4)) else { return [] }
+    func readAll() -> [Learning.Event] { Self.read(url).events }
+
+    /// Valid events, the offset just past the last complete record, and the file size.
+    /// A file without the magic header is treated as empty (rewritten from scratch).
+    static func read(_ url: URL) -> (events: [Learning.Event], goodEnd: Int, size: Int) {
+        guard let data = try? Data(contentsOf: url) else { return ([], 0, 0) }
+        guard data.count >= 8, Array(data.prefix(4)) == Array(magic.prefix(4)) else {
+            // Unrecognized: start over with just a header.
+            try? Data(magic).write(to: url)
+            return ([], 8, 8)
+        }
         var out: [Learning.Event] = []
+        var good = 8
         data.withUnsafeBytes { raw in
             var i = 8
             let n = raw.count
@@ -297,12 +323,13 @@ final class EventLog {
                 let k = raw.loadUnaligned(fromByteOffset: i + 4, as: UInt64.self).littleEndian
                 let row = raw[i + 12]
                 let ql = Int(raw[i + 13])
-                guard i + 14 + ql <= n else { break }   // torn tail write: ignore
+                guard ql <= 32, i + 14 + ql <= n else { break }   // torn tail / garbage
                 let q = Array(raw[(i + 14)..<(i + 14 + ql)])
                 out.append(.init(time: t, key: k, query: q, row: row))
                 i += 14 + ql
+                good = i
             }
         }
-        return out
+        return (out, good, data.count)
     }
 }

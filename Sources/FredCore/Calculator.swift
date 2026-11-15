@@ -24,7 +24,11 @@ public enum Calculator {
         public let copy: String
     }
 
+    /// Longer input isn't a calculation anyone types; also bounds recursion depth.
+    static let maxInput = 512
+
     public static func evaluate(_ query: String) -> Result? {
+        guard query.utf8.count <= maxInput else { return nil }
         var q = query
         return q.withUTF8 { buf -> Result? in
             var p = Parser(buf)
@@ -153,7 +157,8 @@ private struct Parser {
     }
 
     mutating func parseFactor() -> Double? {
-        guard let base = parseUnary() else { return nil }
+        depth += 1; defer { depth -= 1 }
+        guard depth < 64, let base = parseUnary() else { return nil }
         skipSpace()
         if peek == UInt8(ascii: "^") {
             i += 1; sawOperator = true
@@ -169,6 +174,8 @@ private struct Parser {
     }
 
     mutating func parseUnary() -> Double? {
+        depth += 1; defer { depth -= 1 }
+        guard depth < 64 else { return nil }
         skipSpace()
         if peek == UInt8(ascii: "-") { i += 1; guard let v = parseUnary() else { return nil }; return -v }
         if peek == UInt8(ascii: "+") { i += 1; return parseUnary() }

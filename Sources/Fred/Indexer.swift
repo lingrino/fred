@@ -74,12 +74,16 @@ final class Indexer: @unchecked Sendable {
         final class Slots: @unchecked Sendable {
             var apps: [AppScanner.App]?, panes: [SettingsScanner.Pane]?
             var bookmarks: [Catalog.Item]?, contacts: [Catalog.Item]?
-            var ms = [Double](repeating: 0, count: 4)
+            // One stored property per task (distinct memory locations; no shared array).
+            var ms0 = 0.0, ms1 = 0.0, ms2 = 0.0, ms3 = 0.0
+            func set(_ k: Int, _ v: Double) {
+                switch k { case 0: ms0 = v; case 1: ms1 = v; case 2: ms2 = v; default: ms3 = v }
+            }
         }
         let r = Slots()
         DispatchQueue.concurrentPerform(iterations: 4) { k in
             let ts = DispatchTime.now().uptimeNanoseconds
-            defer { r.ms[k] = Double(DispatchTime.now().uptimeNanoseconds - ts) / 1e6 }
+            defer { r.set(k, Double(DispatchTime.now().uptimeNanoseconds - ts) / 1e6) }
             switch k {
             case 0 where doApps: r.apps = AppScanner.scan()
             case 1 where doPanes: r.panes = SettingsScanner.scan()
@@ -94,7 +98,7 @@ final class Indexer: @unchecked Sendable {
         if let c = r.contacts { contacts = c }
         let catalog = Catalog(apps + panes + Command.items() + bookmarks + contacts)
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
-        Log.info("index \(set): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms (apps \(Int(r.ms[0])), panes \(Int(r.ms[1])), bookmarks \(Int(r.ms[2])), contacts \(Int(r.ms[3])) ms)")
+        Log.info("index \(set): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms (apps \(Int(r.ms0)), panes \(Int(r.ms1)), bookmarks \(Int(r.ms2)), contacts \(Int(r.ms3)) ms)")
         let al = appList, pl = paneList
         DispatchQueue.main.async { MainActor.assumeIsolated { self.onCatalog?(catalog, al, pl) } }
     }

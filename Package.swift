@@ -1,9 +1,11 @@
 // swift-tools-version: 6.4
 import PackageDescription
 
-// Hot-path modules are compiled with bounds/overflow checks and exclusivity checking
-// disabled in release builds. Correctness is enforced by tests (debug builds keep all
-// checks) — see CLAUDE.md "Safety model".
+// FredCore — the search/learning/storage kernels — is compiled with bounds/overflow checks
+// and exclusivity checking disabled in release builds; its correctness is enforced by unit
+// and fuzz tests (debug builds keep all checks). The app target keeps Swift's normal
+// release checks: its code isn't hot, and a bug there should crash loudly, not silently
+// corrupt memory (lesson from the 2026-11-14 review).
 let releaseFast: [SwiftSetting] = [
     .unsafeFlags(["-Ounchecked", "-enforce-exclusivity=unchecked", "-wmo"], .when(configuration: .release)),
 ]
@@ -23,14 +25,13 @@ let package = Package(
         .executableTarget(
             name: "Fred",
             dependencies: ["FredCore"],
-            swiftSettings: releaseFast,
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Carbon"),
                 .linkedFramework("Contacts"),
             ]
         ),
-        .executableTarget(name: "FredBench", dependencies: ["FredCore"], swiftSettings: releaseFast),
+        .executableTarget(name: "FredBench", dependencies: ["FredCore"]),
         .testTarget(name: "FredCoreTests", dependencies: ["FredCore"]),
     ]
 )

@@ -68,7 +68,9 @@ public final class SearchIndex: @unchecked Sendable {
             if tmp.isEmpty { continue }
             let len = min(tmp.count, Self.maxEntryLength)
             let start = arena.count
-            precondition(start < 1 << 24, "search arena exceeds 16 MiB")
+            // Spans pack the start into 24 bits: past 16 MiB of text, stop indexing rather
+            // than corrupt (preconditions are compiled out in -Ounchecked builds).
+            if start + len >= 1 << 24 || e.item >= 1 << 24 { break }
             arena.append(contentsOf: tmp[0..<len])
             spans.append(UInt32(start) << 8 | UInt32(len))
             let w = len >= 64 ? ws : ws & ((1 << UInt64(len)) &- 1)

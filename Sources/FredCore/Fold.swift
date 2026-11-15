@@ -65,6 +65,9 @@ public enum Fold {
                     for b in folded.utf8 { out.append(b < 0x80 ? lowerASCII(b) : b) }
                 }
             }
+            // The first non-separator byte always starts a word, even a symbol or emoji
+            // ("#general", "(1) Inbox"), so exact/prefix matching works for such titles.
+            if pos == 0 && out.count > base && out[base] != 0x20 { starts |= 1 }
             if cls != 0 && pos < 64 {
                 let isStart: Bool
                 switch (prev, cls) {

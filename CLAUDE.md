@@ -121,7 +121,14 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
 - No caches. Precompute at index time (folding, masks, icon atlas) and rebuild wholesale;
   every source is cheap enough to re-read in full.
 - FredCore builds with `-Ounchecked -enforce-exclusivity=unchecked` in release; debug
-  builds/tests keep all checks — correctness is established by tests.
+  builds/tests keep all checks — correctness is established by tests (incl. fuzz tests in
+  `FuzzTests.swift`, regression tests in `RegressionTests.swift`). Preconditions vanish in
+  release: guard limits explicitly. The app target (Fred) keeps normal release checks.
+- Anything that indexes a catalog or clip list across time must survive a swap: rows keep
+  item keys (resolve with `Catalog.item(forKey:)`), the clipboard list re-resolves by hash
+  and refreshes on every store change while shown.
+- Logs (learning, clipboard) truncate a torn tail before appending; never append after an
+  unparsed tail.
 - Panels are built once and only ordered in/out. No window animations, no implicit CA actions.
 - **Never** wrap hot-path layer updates in `CATransaction.begin/commit`: when no implicit
   transaction is open yet (start of a key event), an explicit one is top-level and commits

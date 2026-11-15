@@ -149,7 +149,14 @@ public enum Matcher {
         let wordsMask = limit == 64 ? ws : ws & ((1 << UInt64(limit)) - 1)
         // `used` collects word starts where a run began, for the fine score.
         var used: UInt64 = 0
-        guard acr(c, 0, m, t, limit, wordsMask, -1, &used) else { return nil }
+        // Memo of failed (query index, position) states: without it the backtracking is
+        // exponential on adversarial input ("z a a a … a" vs "aaaaaaaaaz" took seconds).
+        // 32 query bytes × 65 positions = 2080 bits; the stack buffer is 264 bytes.
+        let ok = withUnsafeTemporaryAllocation(of: UInt64.self, capacity: 33) { memo -> Bool in
+            memo.initialize(repeating: 0)
+            return acr(c, 0, min(m, maxQuery), t, limit, wordsMask, -1, &used, memo.baseAddress!)
+        }
+        guard ok else { return nil }
         let totalWords = Int32(wordsMask.nonzeroBitCount)
         let lastStart = 63 - used.leadingZeroBitCount
         let wordsUpToLast = Int32((wordsMask & ((2 << UInt64(lastStart)) &- 1)).nonzeroBitCount)
@@ -160,12 +167,16 @@ public enum Matcher {
     }
 
     /// Can c[i...] be matched with c[i] at a word start after `prev`, or (if i > 0) at prev+1?
+    /// Success doesn't depend on `used` (it only records the path for scoring), so a
+    /// failed (i, prev) can be memoized.
     static func acr(_ c: UnsafePointer<UInt8>, _ i: Int, _ m: Int, _ t: UnsafePointer<UInt8>, _ n: Int,
-                    _ ws: UInt64, _ prev: Int, _ used: inout UInt64) -> Bool {
+                    _ ws: UInt64, _ prev: Int, _ used: inout UInt64, _ memo: UnsafeMutablePointer<UInt64>) -> Bool {
         if i == m { return true }
+        let bit = i * 65 + (prev + 1)          // prev ∈ -1..<64
+        if memo[bit >> 6] >> UInt64(bit & 63) & 1 != 0 { return false }
         // Continue the run inside the current word.
         if i > 0 && prev + 1 < n && t[prev + 1] == c[i] && (ws >> UInt64(prev + 1)) & 1 == 0 {
-            if acr(c, i + 1, m, t, n, ws, prev + 1, &used) { return true }
+            if acr(c, i + 1, m, t, n, ws, prev + 1, &used, memo) { return true }
         }
         // Jump to a later word start.
         var w = prev + 1 >= 64 ? 0 : ws & ~((1 << UInt64(prev + 1)) &- 1)
@@ -175,10 +186,11 @@ public enum Matcher {
             if t[p] == c[i] {
                 let before = used
                 used |= 1 << UInt64(p)
-                if acr(c, i + 1, m, t, n, ws, p, &used) { return true }
+                if acr(c, i + 1, m, t, n, ws, p, &used, memo) { return true }
                 used = before
             }
         }
+        memo[bit >> 6] |= 1 << UInt64(bit & 63)
         return false
     }
 

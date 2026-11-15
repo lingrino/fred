@@ -14,9 +14,11 @@ final class Launcher: NSObject, QueryFieldDelegate {
     let list = ResultList(capacity: 9, width: Theme.width)
     let engine: Engine
 
-    /// What each visible row refers to.
+    /// What each visible row refers to. Catalog rows carry the item's stable key: the
+    /// catalog can be swapped by a background reindex while the panel is open, so a row's
+    /// index is only a hint — activation resolves the key against the current catalog.
     enum Ref {
-        case item(Int)
+        case item(Int, key: UInt64)
         case calc(Calculator.Result)
         case field(ContactCard.Field)
         case process(NSRunningApplication)
@@ -137,6 +139,13 @@ final class Launcher: NSObject, QueryFieldDelegate {
         panel.park()
     }
 
+    /// The catalog was replaced (background reindex): if results are on screen, recompute
+    /// them so rows, titles and indices all refer to the new catalog.
+    func catalogChanged() {
+        guard panel.shown, case .search = mode else { return }
+        queryChanged()
+    }
+
     // MARK: Typing
 
     func queryFieldDidChange(_ f: QueryField) { queryChanged() }
@@ -184,7 +193,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
             for i in 0..<top.count {
                 let item = top.item(i)
                 rows.append(.init(title: cat.titles[item], icon: .atlas(engine.icon(item)), titleItem: item))
-                r.append(.item(item))
+                r.append(.item(item, key: cat.keys[item]))
             }
         }
         render(rows, r)
@@ -251,9 +260,16 @@ final class Launcher: NSObject, QueryFieldDelegate {
         case .calc(let c):
             hide()
             Actions.copy(c.copy)
-        case .item(let item):
+        case .item(let hint, let key):
             let cat = engine.searcher.catalog
-            engine.recordPick(item: item, query: query.bytes, row: i)
+            let item: Int
+            if hint < cat.count && cat.keys[hint] == key { item = hint }
+            else if let found = cat.item(forKey: key) { item = found }
+            else { queryChanged(); return }          // gone (app uninstalled): just refresh
+            // Learning's "row" is the position among catalog results (the calculator row
+            // isn't one).
+            let calcRows = refs.prefix(i).filter { if case .calc = $0 { true } else { false } }.count
+            engine.recordPick(item: item, query: query.bytes, row: i - calcRows)
             let payload = cat.payloads[item]
             switch cat.kinds[item] {
             case .app:
@@ -284,7 +300,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
     /// Development hook: opens the first contact row's card (no side effects).
     func openFirstContact() -> Bool {
         let cat = engine.searcher.catalog
-        for r in refs { if case .item(let i) = r, cat.kinds[i] == .contact { showContact(id: cat.payloads[i], name: cat.titles[i]); return true } }
+        for r in refs { if case .item(let i, _) = r, i < cat.count, cat.kinds[i] == .contact { showContact(id: cat.payloads[i], name: cat.titles[i]); return true } }
         return false
     }
 

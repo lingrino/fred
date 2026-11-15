@@ -69,14 +69,23 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
         get { storage as String }
         set {
             storage.setString(newValue)
-            selection = NSRange(location: storage.length, length: 0)
             marked = NSRange(location: NSNotFound, length: 0)
+            select(NSRange(location: storage.length, length: 0))
             undoStack.removeAll(); redoStack.removeAll()
             relayout()
         }
     }
 
-    func selectAll() { selection = NSRange(location: 0, length: storage.length); relayout() }
+    func selectAll() { select(NSRange(location: 0, length: storage.length), anchor: 0); relayout() }
+
+    /// Every selection change goes through here, so `anchor` (the fixed end of a
+    /// shift-extended selection) can never point outside the text.
+    private func select(_ r: NSRange, anchor a: Int? = nil) {
+        let n = storage.length
+        let lo = max(0, min(r.location, n)), hi = max(lo, min(NSMaxRange(r), n))
+        selection = NSRange(location: lo, length: hi - lo)
+        anchor = max(0, min(a ?? lo, n))
+    }
 
     // MARK: Keyboard
 
@@ -172,7 +181,7 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
             redoStack.removeAll()
         }
         storage.replaceCharacters(in: r, with: s)
-        selection = NSRange(location: r.location + (s as NSString).length, length: 0)
+        select(NSRange(location: r.location + (s as NSString).length, length: 0))
         Self.replaceCost.add(nowNanos() - t0)
         changed()
     }
@@ -208,10 +217,10 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
         let i = max(0, min(i, storage.length))
         if extend {
             if selection.length == 0 { anchor = selection.location }
-            selection = NSRange(location: min(anchor, i), length: abs(i - anchor))
+            let a = min(anchor, storage.length)
+            select(NSRange(location: min(a, i), length: abs(i - a)), anchor: a)
         } else {
-            selection = NSRange(location: i, length: 0)
-            anchor = i
+            select(NSRange(location: i, length: 0), anchor: i)
         }
         relayout()
     }
@@ -263,39 +272,55 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
         guard var s = NSPasteboard.general.string(forType: .string) else { return }
         s = s.replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
-        replace(hasMarkedText() ? marked : selection, with: s)
+        if hasMarkedText() {
+            // Pasting over in-progress composition: end it, or the stale marked range
+            // would be reused by the next input-method call.
+            let r = marked
+            marked = NSRange(location: NSNotFound, length: 0)
+            inputContext?.discardMarkedText()
+            replace(r, with: s)
+        } else {
+            replace(selection, with: s)
+        }
     }
 
     @objc func undo(_ sender: Any?) {
         guard let (t, sel) = undoStack.popLast() else { return }
         redoStack.append((storage as String, selection))
-        storage.setString(t); selection = sel
+        storage.setString(t); select(sel)
         changed()
     }
 
     @objc func redo(_ sender: Any?) {
         guard let (t, sel) = redoStack.popLast() else { return }
         undoStack.append((storage as String, selection))
-        storage.setString(t); selection = sel
+        storage.setString(t); select(sel)
         changed()
     }
 
     // MARK: NSTextInputClient (composed input path)
 
+    /// Ranges from the input system are clamped to the text.
+    private func clamp(_ r: NSRange) -> NSRange {
+        let n = storage.length
+        let lo = min(max(0, r.location), n)
+        return NSRange(location: lo, length: min(r.length, n - lo))
+    }
+
     func insertText(_ string: Any, replacementRange: NSRange) {
         let s = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
-        let r = replacementRange.location != NSNotFound ? replacementRange : (hasMarkedText() ? marked : selection)
+        let r = clamp(replacementRange.location != NSNotFound ? replacementRange : (hasMarkedText() ? marked : selection))
         marked = NSRange(location: NSNotFound, length: 0)
         replace(r, with: s.replacingOccurrences(of: "\n", with: " "))
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         let s = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
-        let r = replacementRange.location != NSNotFound ? replacementRange : (hasMarkedText() ? marked : selection)
+        let r = clamp(replacementRange.location != NSNotFound ? replacementRange : (hasMarkedText() ? marked : selection))
         storage.replaceCharacters(in: r, with: s)
         let len = (s as NSString).length
         marked = len > 0 ? NSRange(location: r.location, length: len) : NSRange(location: NSNotFound, length: 0)
-        selection = NSRange(location: r.location + selectedRange.location, length: selectedRange.length)
+        select(NSRange(location: r.location + selectedRange.location, length: selectedRange.length))
         relayout()   // marked text isn't a query yet; no delegate call
     }
 
@@ -359,7 +384,8 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
     override func mouseDragged(with event: NSEvent) {
         let i = index(atX: convert(event.locationInWindow, from: nil).x)
         if selection.length == 0 && i != selection.location { anchor = selection.location }
-        selection = NSRange(location: min(anchor, i), length: abs(i - anchor))
+        let a = min(anchor, storage.length)
+        select(NSRange(location: min(a, i), length: abs(i - a)), anchor: a)
         relayout()
     }
 

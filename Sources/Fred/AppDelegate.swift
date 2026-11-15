@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clipboard?.startMonitoring()
         mark("clipboard")
         engine.onTitles = { [weak self] t in self?.launcher.list.titles = t }
+        engine.onCatalogChanged = { [weak self] in self?.launcher?.catalogChanged() }
         engine.onAtlas = { [weak self] a in
             self?.launcher.list.atlas = a
             self?.clipboard?.list.atlas = a

@@ -49,15 +49,19 @@ public final class ClipStore {
         try? FileManager.default.createDirectory(at: imagesDir!, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("clipboard.log")
         let before = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        replay(url)
+        let goodEnd = replay(url)
         let pruned = prune(now: now, persist: false)
-        if pruned > 0 || garbageBytes > 1 << 20 || garbageBytes > before / 4 {
-            rewrite(url)
+        // Rewrite when there's garbage to drop or the tail is torn/corrupt (a torn tail
+        // left in place would swallow every later append).
+        var clean = goodEnd == before
+        if pruned > 0 || garbageBytes > 1 << 20 || garbageBytes > before / 4 || !clean {
+            clean = rewrite(url)
         }
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: Data(Self.magic))
         }
         log = try? FileHandle(forWritingTo: url)
+        if !clean && goodEnd >= 8 { try? log?.truncate(atOffset: UInt64(goodEnd)) }
         _ = try? log?.seekToEnd()
     }
 
@@ -114,18 +118,20 @@ public final class ClipStore {
     @discardableResult
     public func prune(now: UInt32, persist: Bool = true) -> Int {
         let cutoff = now > Self.retention ? now - Self.retention : 0
-        var n = 0
-        while n < count && time[n] < cutoff { n += 1 }   // entries are time-ordered
-        for i in 0..<n where kind[i] == .image {
-            if let u = imageURL(hash[i]) { try? FileManager.default.removeItem(at: u) }
-        }
-        if n > 0 {
-            for _ in 0..<n {
-                if persist { writeOp(3, time: 0, hash: hash[0]) }
-                remove(at: 0)
+        // Usually the oldest entries are first, but imports can append older clips, so
+        // scan everything (hourly, a few thousand entries).
+        var removed = 0
+        var i = count - 1
+        while i >= 0 {
+            if time[i] < cutoff {
+                if kind[i] == .image, let u = imageURL(hash[i]) { try? FileManager.default.removeItem(at: u) }
+                if persist { writeOp(3, time: 0, hash: hash[i]) }
+                remove(at: i)
+                removed += 1
             }
+            i -= 1
         }
-        return n
+        return removed
     }
 
     // MARK: Search
@@ -212,11 +218,9 @@ public final class ClipStore {
                 else { out.append(b) }
             }
         } else {
-            // Cut at a UTF-8 boundary, fold via the general path.
-            var end = bytes.endIndex
-            while end > bytes.startIndex && (bytes[end - 1] & 0xC0) == 0x80 { end -= 1 }
-            if end > bytes.startIndex && bytes[end - 1] >= 0xC0 { end -= 1 }
-            let s = String(decoding: bytes[bytes.startIndex..<end], as: UTF8.self)
+            // The search window may cut a multi-byte character; String(decoding:) turns a
+            // broken tail into U+FFFD instead of dropping valid characters.
+            let s = String(decoding: bytes, as: UTF8.self)
             let start = out.count
             Fold.fold(s, into: &out)
             for k in start..<out.count where out[k] == 0x0A || out[k] == 0x0D { out[k] = 0x20 }
@@ -267,9 +271,12 @@ public final class ClipStore {
         return d
     }
 
-    private func replay(_ url: URL) {
+    /// Replays the log; returns the offset just past the last complete record (0 if the
+    /// file is missing or unrecognized).
+    private func replay(_ url: URL) -> Int {
         guard let data = try? Data(contentsOf: url, options: .alwaysMapped), data.count >= 8,
-              Array(data.prefix(4)) == Array(Self.magic.prefix(4)) else { return }
+              Array(data.prefix(4)) == Array(Self.magic.prefix(4)) else { return 0 }
+        var good = 8
         data.withUnsafeBytes { raw in
             var i = 8
             let n = raw.count
@@ -300,12 +307,15 @@ public final class ClipStore {
                 default:
                     return   // corrupt: keep what we have
                 }
+                good = i
             }
         }
+        return good
     }
 
     /// Writes the live entries as a fresh log and atomically replaces the old one.
-    private func rewrite(_ url: URL) {
+    @discardableResult
+    private func rewrite(_ url: URL) -> Bool {
         var d = Data(Self.magic)
         for i in 0..<count {
             d.append(Self.encodeAdd(kind: kind[i], hash: hash[i], app: app(i), text: Array(textArena[textSpan[i]]), time: time[i]))
@@ -313,8 +323,12 @@ public final class ClipStore {
         let tmp = url.appendingPathExtension("tmp")
         do {
             try d.write(to: tmp, options: .atomic)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-        } catch { return }
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            } else {
+                try FileManager.default.moveItem(at: tmp, to: url)
+            }
+        } catch { return false }
         // Compact arenas too.
         var ta: [UInt8] = [], fa: [UInt8] = []
         ta.reserveCapacity(textArena.count); fa.reserveCapacity(foldArena.count)
@@ -329,6 +343,7 @@ public final class ClipStore {
             let live = Set((0..<count).filter { kind[$0] == .image }.map { String(format: "%016llx.png", hash[$0]) })
             for f in files where !live.contains(f) { try? FileManager.default.removeItem(at: idir.appendingPathComponent(f)) }
         }
+        return true
     }
 
     /// FNV-1a 64 — stable content hash for dedupe and image file names.

@@ -69,15 +69,19 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         }
         let todo = jobs
         DispatchQueue.global(qos: .utility).async {
+            // Each iteration writes its own slot of a preallocated buffer (no shared
+            // Swift array mutation across threads).
             final class Out: @unchecked Sendable {
-                var v: [CGImage?]
-                init(_ n: Int) { v = Array(repeating: nil, count: n) }
+                let v: UnsafeMutableBufferPointer<CGImage?>
+                init(_ n: Int) { v = .allocate(capacity: n); v.initialize(repeating: nil) }
+                deinit { v.deinitialize(); v.deallocate() }
             }
             let out = Out(todo.count)
             DispatchQueue.concurrentPerform(iterations: todo.count) { k in out.v[k] = Self.thumbnail(url: todo[k].1) }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     for (k, job) in todo.enumerated() { if let t = out.v[k] { self.thumbs[job.0] = t } }
+                    self.storeChanged()
                 }
             }
         }
@@ -93,7 +97,9 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         timer = t
         // Daily-ish pruning of >90-day-old clips.
         let p = Timer(timeInterval: 3600, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { _ = self?.store.prune(now: UInt32(Date().timeIntervalSince1970)) }
+            MainActor.assumeIsolated {
+                if (self?.store.prune(now: UInt32(Date().timeIntervalSince1970)) ?? 0) > 0 { self?.storeChanged() }
+            }
         }
         RunLoop.main.add(p, forMode: .common)
     }
@@ -120,6 +126,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             let text = urls.map(\.path).joined(separator: "\n")
             let h = ClipStore.hash(text, kind: .files)
             store.add(kind: .files, text: text, hash: h, app: source, time: now)
+            storeChanged()
             if thumbs[h] == nil, let p = ClipPreview.singleImageFile(text) {
                 io.async { [weak self] in
                     guard let t = Self.thumbnail(url: URL(fileURLWithPath: p)) else { return }
@@ -144,6 +151,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
                     MainActor.assumeIsolated {
                         if let thumb { self.thumbs[h] = thumb }
                         self.store.add(kind: .image, text: "Image \(w)×\(hgt)", hash: h, app: source, time: now)
+                        self.storeChanged()
                     }
                 }
             }
@@ -152,6 +160,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         if let s = pb.string(forType: .string), !s.isEmpty,
            !s.allSatisfy({ $0.isWhitespace }) {
             store.add(kind: .text, text: s, hash: ClipStore.hash(s, kind: .text), app: source, time: now)
+            storeChanged()
         }
     }
 
@@ -209,6 +218,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
 
     /// Renders once invisibly and parks, so the first ⌥⇧C pays no first-render cost.
     func warmUp() {
+        guard !panel.shown else { return }
         panel.alphaValue = 0
         panel.position(height: ClipTheme.height)
         panel.orderFrontRegardless()
@@ -220,6 +230,22 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
 
     func queryFieldDidChange(_ f: QueryField) { refresh() }
 
+    /// The store changed (new clip, prune, re-copy moved something): result indices are
+    /// stale. If the panel is open, recompute and keep the same clip selected.
+    private func storeChanged() {
+        guard panel.shown else { return }
+        let keep = selectedHash.flatMap { store.index(ofHash: $0) }
+        results = store.search(field.text, limit: 500)
+        if let k = keep, let pos = results.firstIndex(of: k) { selected = pos } else { selected = min(selected, max(0, results.count - 1)) }
+        if selected < offset { offset = selected }
+        if selected >= offset + ClipTheme.visibleRows { offset = selected - ClipTheme.visibleRows + 1 }
+        offset = max(0, min(offset, max(0, results.count - ClipTheme.visibleRows)))
+        render()
+    }
+
+    /// Content hash of the selected clip as of the last render (survives index shifts).
+    private var selectedHash: UInt64?
+
     private func refresh() {
         let t0 = nowNanos()
         results = store.search(field.text, limit: 500)
@@ -230,6 +256,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
     }
 
     private func render() {
+        selectedHash = selected < results.count && results[selected] < store.count ? store.hash[results[selected]] : nil
         let end = min(results.count, offset + ClipTheme.visibleRows)
         var rows: [ResultList.Row] = []
         let now = UInt32(Date().timeIntervalSince1970)
