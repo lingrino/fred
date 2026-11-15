@@ -10,7 +10,7 @@ let releaseFast: [SwiftSetting] = [
 
 let package = Package(
     name: "fred",
-    platforms: [.macOS("26.0")],
+    platforms: [.macOS("27.0")],
     products: [
         .executable(name: "Fred", targets: ["Fred"]),
         .executable(name: "fredbench", targets: ["FredBench"]),
