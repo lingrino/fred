@@ -51,13 +51,19 @@ enum TextImage {
     }
 }
 
+/// Layer delegate that vetoes every implicit animation, for any key. An `actions`
+/// dictionary only covers the keys listed — removing a mask, for example, still ran a
+/// default cross-fade "transition" (visible as a text-colored box flashing on rows).
+final class NoActions: NSObject, CALayerDelegate {
+    nonisolated(unsafe) static let shared = NoActions()
+    func action(for layer: CALayer, forKey event: String) -> (any CAAction)? { NSNull() }
+}
+
 extension CALayer {
     /// A layer with every implicit animation disabled (Fred never animates layout).
     static func still() -> CALayer {
         let l = CALayer()
-        l.actions = ["contents": NSNull(), "contentsRect": NSNull(), "position": NSNull(), "bounds": NSNull(),
-                     "frame": NSNull(), "hidden": NSNull(), "backgroundColor": NSNull(), "opacity": NSNull(),
-                     "cornerRadius": NSNull(), "sublayers": NSNull()]
+        l.delegate = NoActions.shared
         return l
     }
 }

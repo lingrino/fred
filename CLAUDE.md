@@ -131,6 +131,10 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
 - Logs (learning, clipboard) truncate a torn tail before appending; never append after an
   unparsed tail.
 - Panels are built once and only ordered in/out. No window animations, no implicit CA actions.
+- Every Fred-created layer uses `CALayer.still()` (delegate `NoActions` vetoes ALL implicit
+  animations — an `actions` dictionary missed the default "transition" on mask removal,
+  which flashed a text-colored box on rows). Verify with `fredctl animcheck <q1>|<q2>`:
+  it must report only the caret `blink`.
 - **Never** wrap hot-path layer updates in `CATransaction.begin/commit`: when no implicit
   transaction is open yet (start of a key event), an explicit one is top-level and commits
   to the window server immediately (~200 µs each). Layers are created with
@@ -153,7 +157,9 @@ derivation orphans learned history — don't, or migrate.
 `snapshot <png> [q]` (renders the content layer tree offscreen — no glass/vibrancy — and
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
 (visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
-`learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`.
+`learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`,
+`animcheck <q1>|<q2>` (implicit animations on layers),
+`glassbench` (backdrop variants' show/resize cost; takes key focus — run when idle).
 
 Interactive testing with computer use: `make dev` (Dock icon + Fred activates on show,
 because the automation tool only types into the frontmost app). Check the user is away

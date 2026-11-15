@@ -26,9 +26,13 @@ class FloatingPanel: NSPanel {
     private let root = FlippedView()
     private var glasses: [(height: CGFloat, view: NSView)] = []
     private var singleResizable = false
+    /// "glass" mode: one full-height glass view, clipped by this mask; resizing = moving
+    /// the mask edge (no glass re-render).
+    private var glassMask: CALayer?
     private var current: NSView?
     /// Backdrop A/B (`defaults write dev.fred.Fred debugBackdrop <name>`): "vibrancy"
-    /// (default: NSVisualEffectView, state pinned active), "glass" (NSGlassEffectView per
+    /// (NSVisualEffectView, state pinned active), "glass" (one full-height
+    /// NSGlassEffectView clipped by a resizable mask), "multiglass" (one glass view per
     /// height), "oneglass", "plain".
     ///
     /// Why not Liquid Glass by default: measured on this Mac, NSGlassEffectView re-renders
@@ -58,7 +62,24 @@ class FloatingPanel: NSPanel {
         // Glass re-renders when resized, so it gets one pre-built view per height.
         // Vibrancy resizes cheaply: one view, resized.
         singleResizable = Self.backdrop == "vibrancy" || Self.backdrop == "plain"
-        let hs = Self.backdrop == "oneglass" || singleResizable ? [heights.max() ?? 64] : Array(Set(heights)).sorted()
+        if Self.backdrop == "glass" {
+            let container = FlippedView(frame: root.bounds)
+            container.wantsLayer = true
+            let ge = NSGlassEffectView(frame: container.bounds)
+            ge.style = .regular
+            ge.cornerRadius = Theme.cornerRadius
+            container.addSubview(ge)
+            let m = CALayer.still()
+            m.backgroundColor = NSColor.black.cgColor
+            m.cornerRadius = Theme.cornerRadius
+            container.layer!.mask = m
+            glassMask = m
+            root.addSubview(container)
+            glasses.append((maxHeight, container))
+            current = container
+        }
+        let hs = Self.backdrop == "glass" ? [] : Self.backdrop == "oneglass" || singleResizable
+            ? [heights.max() ?? 64] : Array(Set(heights)).sorted()
         for h in hs {
             let frame = NSRect(x: 0, y: 0, width: width, height: h)
             let g: NSView
@@ -174,10 +195,17 @@ class FloatingPanel: NSPanel {
         setHeight(height)
     }
 
-    var glassHeight: CGFloat { current?.frame.height ?? 0 }
+    var glassHeight: CGFloat { glassMask?.frame.height ?? current?.frame.height ?? 0 }
 
     /// Shows the glass whose height is the smallest one ≥ `h`.
     func setHeight(_ h: CGFloat) {
+        if let m = glassMask {
+            let h = min(h, maxHeight)
+            guard abs(m.frame.height - h) > 0.5 else { return }
+            m.frame = CGRect(x: 0, y: 0, width: frame.width, height: h)
+            invalidateShadow()
+            return
+        }
         if singleResizable, let g = glasses.first?.view {
             if current !== g { g.isHidden = false; current = g }
             guard abs(g.frame.height - h) > 0.5 else { return }

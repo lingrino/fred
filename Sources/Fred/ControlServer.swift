@@ -162,6 +162,25 @@ final class ControlServer: @unchecked Sendable {
         case "resetstats":
             for x in [l.searchLatency, l.keystrokeLatency, l.stOS, l.stDeliver, l.stAppKit, l.stDispatch, l.stRowsRender, l.stResize, l.stDraw, l.stDisplay, l.stFlush, l.showLatency, QueryField.renderCost, QueryField.relayoutCost, QueryField.blinkCost, QueryField.replaceCost] { x.reset() }
             return "ok"
+        case "animcheck":
+            // animcheck <q1>|<q2>: type q1 then q2 (offscreen-visible, no focus change) and
+            // report any Core Animation animations attached to the launcher's layers.
+            let qs = arg.split(separator: "|").map(String.init)
+            guard qs.count == 2 else { return "usage: animcheck <q1>|<q2>" }
+            let was = l.isVisible
+            if !was { l.panel.alphaValue = 0; l.panel.position(height: l.panel.glassHeight); l.panel.orderFrontRegardless() }
+            l.field.text = qs[0]; l.queryChanged(); l.commitNow()
+            l.field.text = qs[1]; l.queryChanged()
+            var found: [String] = []
+            func walk(_ layer: CALayer, _ path: String) {
+                for k in layer.animationKeys() ?? [] { found.append("\(path) [\(type(of: layer))] \(k)") }
+                if let m = layer.mask { walk(m, path + ".mask") }
+                for (i, c) in (layer.sublayers ?? []).enumerated() { walk(c, path + "/\(i)") }
+            }
+            if let root = l.panel.contentView?.layer { walk(root, "root") }
+            l.commitNow()
+            if !was { l.panel.park() }
+            return found.isEmpty ? "no animations" : found.joined(separator: "\n")
         case "glassbench":
             return GlassBench.run()
         case "shadow":

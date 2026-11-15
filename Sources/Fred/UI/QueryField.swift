@@ -46,7 +46,6 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
         super.init(frame: frame)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
-        layer!.actions = CALayer.still().actions
         for l in [selectionLayer, placeholderLayer, textLayer, caret] { layer!.addSublayer(l) }
         setAccessibilityRole(.textField)
         setAccessibilityElement(true)
