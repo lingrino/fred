@@ -13,10 +13,11 @@ import AppKit
 ///   pasteboard    Paste from Other Apps            set to Allow (clipboard history reads)
 ///   chromeData    Files & Folders → Google Chrome  toggle (macOS 27 app-data protection)
 ///   finder        Automation → Finder              prompt (Empty Trash)
+///   loginwindow   Automation → loginwindow         prompt (Sleep, Restart, Shut Down)
 @MainActor
 enum Permissions {
     enum Kind: String, CaseIterable {
-        case contacts, postEvents, pasteboard, chromeData, finder
+        case contacts, postEvents, pasteboard, chromeData, finder, loginwindow
     }
 
     static func status(_ k: Kind) -> Bool? {
@@ -34,8 +35,8 @@ enum Permissions {
         case .chromeData:
             let p = ChromeData.probePath
             return FileManager.default.isReadableFile(atPath: p) && (try? Data(contentsOf: URL(fileURLWithPath: p), options: .alwaysMapped)) != nil
-        case .finder:
-            return automationStatus(bundleID: "com.apple.finder", ask: false)
+        case .finder: return automation["com.apple.finder"] ?? nil
+        case .loginwindow: return automation["com.apple.loginwindow"] ?? nil
         }
     }
 
@@ -56,8 +57,23 @@ enum Permissions {
             // Fred to Files & Folders, where the user can enable it.
             _ = try? Data(contentsOf: URL(fileURLWithPath: ChromeData.probePath))
         }
-        if status(.finder) != true {
-            DispatchQueue.global(qos: .utility).async { _ = automationStatus(bundleID: "com.apple.finder", ask: true) }
+        refreshAutomation(ask: true)
+    }
+
+    /// Last known Automation status per target bundle id. AEDeterminePermissionToAutomateTarget
+    /// can block for as long as a consent prompt is on screen — even with ask=false, from
+    /// another thread — so it is NEVER called on the main thread; main only reads this.
+    private static var automation: [String: Bool?] = [:]
+    static let automationTargets = ["com.apple.finder", "com.apple.loginwindow"]
+    private static let automationQueue = DispatchQueue(label: "fred.permissions", qos: .utility)
+
+    static func refreshAutomation(ask: Bool) {
+        for id in automationTargets {
+            automationQueue.async {
+                let st = automationStatus(bundleID: id, ask: false)
+                let final = (st != true && ask) ? automationStatus(bundleID: id, ask: true) : st
+                DispatchQueue.main.async { MainActor.assumeIsolated { automation[id] = final } }
+            }
         }
     }
 

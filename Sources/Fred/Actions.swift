@@ -51,8 +51,13 @@ enum Actions {
         }
     }
 
-    /// QA1134: Apple events to loginwindow (the "system process").
+    /// QA1134: Apple events to loginwindow (the "system process"). Sent off-main: if the
+    /// Automation consent prompt is pending, AESend blocks until it is answered.
     static func sendToLoginWindow(_ id: AEEventID) {
+        DispatchQueue.global(qos: .userInitiated).async { sendToLoginWindowNow(id) }
+    }
+
+    nonisolated static func sendToLoginWindowNow(_ id: AEEventID) {
         var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: UInt32(kSystemProcess))
         let target = NSAppleEventDescriptor(descriptorType: typeProcessSerialNumber, bytes: &psn,
                                             length: MemoryLayout<ProcessSerialNumber>.size)
