@@ -32,7 +32,7 @@ final class IconAtlas: @unchecked Sendable {
             case .lock: "lock.fill"
             case .restart: "arrow.clockwise"
             case .shutDown: "power"
-            case .forceQuit: "xmark.octagon.fill"
+            case .forceQuit: "xmark"
             case .fred: "f.cursive"
             case .generic: "app.dashed"
             case .text: "text.alignleft"

@@ -401,6 +401,15 @@ final class ClipPreview: FlippedView {
         meta.frame = NSRect(x: 8, y: bounds.height - 18, width: bounds.width - 16, height: 16)
     }
 
+    /// The path if `text` is exactly one existing image file.
+    static func singleImageFile(_ text: String) -> String? {
+        guard !text.contains("\n") else { return nil }
+        let ext = (text as NSString).pathExtension.lowercased()
+        guard let t = UTType(filenameExtension: ext), t.conforms(to: .image),
+              FileManager.default.fileExists(atPath: text) else { return nil }
+        return text
+    }
+
     func show(_ i: Int?, store: ClipStore, engine: Engine) {
         guard let i else { textView.string = ""; imageView.image = nil; meta.stringValue = ""; shown = nil; return }
         let key = (i, store.hash[i])
@@ -417,6 +426,13 @@ final class ClipPreview: FlippedView {
             imageView.isHidden = false
             imageView.image = store.imageURL(store.hash[i]).flatMap { NSImage(contentsOf: $0) }
             meta.stringValue = [store.text(i), app, df.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
+        case .files where Self.singleImageFile(store.text(i)) != nil:
+            // A copied image file (e.g. a screenshot from Finder or a screenshot tool): show it.
+            let path = Self.singleImageFile(store.text(i))!
+            scroll.isHidden = true
+            imageView.isHidden = false
+            imageView.image = NSImage(contentsOfFile: path)
+            meta.stringValue = [path, app, df.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
         case .text, .files:
             imageView.isHidden = true
             imageView.image = nil
