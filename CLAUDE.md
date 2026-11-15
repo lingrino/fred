@@ -140,3 +140,28 @@ doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|es
   `fredctl dryrun on` or launch with `FRED_DRY_RUN=1`.
 - Don't pollute clipboard history; remove test clips with `fredctl clip forget <q>`.
 - Prefer `snapshot` over showing panels; the user may be typing in another app.
+
+## Latency notes (measured 2026-11-14, M4 Max, macOS 27.2; `fredctl stats`)
+
+Keystroke (p50): OS delivery ~0.4–1.5 ms (outside our control) → Fred ~0.76 ms in-process:
+key handling ~0.28 ms (QueryField fast path + field text render) · search+rows ~0.04 ms ·
+draw+commit ~0.44 ms (mostly the fixed CA→window-server commit). Hotkey → frame committed
+~2.2 ms (becoming key ~1.2 ms of it). Search kernel alone: p50 8 µs over a 10.7k-entry index.
+
+What was measured and why the code looks the way it does — don't regress these:
+- NSTextField/field editor costs ~3.7 ms per key → `QueryField` (custom NSTextInputClient,
+  fast path in keyDown, IME/dead keys via inputContext).
+- NSApplication/NSWindow key dispatch ~100 µs → `FredApplication.sendEvent` hands plain
+  key-downs for Fred panels straight to the field.
+- Explicit `CATransaction.begin/commit` at the start of an event = an extra full commit
+  (~200 µs) → never use them in hot paths; layers are `CALayer.still()`.
+- Resizing a window: 1.3–2.6 ms → the window is fixed at max height; only the backdrop view
+  resizes.
+- NSGlassEffectView (Liquid Glass): ~10 ms re-render every show (key-state change) and
+  ~1 ms per resize → default backdrop is NSVisualEffectView (state pinned active).
+  `defaults write dev.fred.Fred debugBackdrop glass` to A/B.
+- Ordering a window out discards its rendered state → panels are "parked" (ordered in,
+  alpha 0, click-through, `canBecomeKey == false`) instead of ordered out.
+- Row text rasterized per keystroke ~150 µs → `TitleAtlas` (all titles pre-rendered as A8
+  masks, rows are mask + color layers).
+- Rows as NSViews: AppKit bookkeeping on hide/show → rows are plain CALayer trees.

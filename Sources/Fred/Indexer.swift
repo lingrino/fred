@@ -32,7 +32,11 @@ final class Indexer: @unchecked Sendable {
     func start() {
         queue.async { self.reload([.all]) }
         watchFiles()
+        // contactsd posts a change notification right after the first fetch; ignore the
+        // first few seconds so launch doesn't fetch everything twice.
+        let started = DispatchTime.now()
         NotificationCenter.default.addObserver(forName: .CNContactStoreDidChange, object: nil, queue: nil) { [weak self] _ in
+            guard DispatchTime.now() > started + 10 else { return }
             self?.schedule(.contacts)
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
@@ -62,19 +66,35 @@ final class Indexer: @unchecked Sendable {
     private func reload(_ set: Set<Source>) {
         let t0 = DispatchTime.now().uptimeNanoseconds
         let all = set.contains(.all)
-        if all || set.contains(.apps) {
-            appList = AppScanner.scan()
-            apps = AppScanner.items(appList)
+        // Sources are independent: load them concurrently (contacts alone is ~100 ms of
+        // XPC to contactsd; apps/panes are file system bound).
+        let doApps = all || set.contains(.apps), doPanes = all
+        let doBookmarks = all || set.contains(.bookmarks), doContacts = all || set.contains(.contacts)
+        // Each task writes only its own slot; concurrentPerform returns after all finish.
+        final class Slots: @unchecked Sendable {
+            var apps: [AppScanner.App]?, panes: [SettingsScanner.Pane]?
+            var bookmarks: [Catalog.Item]?, contacts: [Catalog.Item]?
+            var ms = [Double](repeating: 0, count: 4)
         }
-        if all {
-            paneList = SettingsScanner.scan()
-            panes = SettingsScanner.items(paneList)
+        let r = Slots()
+        DispatchQueue.concurrentPerform(iterations: 4) { k in
+            let ts = DispatchTime.now().uptimeNanoseconds
+            defer { r.ms[k] = Double(DispatchTime.now().uptimeNanoseconds - ts) / 1e6 }
+            switch k {
+            case 0 where doApps: r.apps = AppScanner.scan()
+            case 1 where doPanes: r.panes = SettingsScanner.scan()
+            case 2 where doBookmarks: r.bookmarks = ChromeBookmarks.items(ChromeBookmarks.load())
+            case 3 where doContacts: r.contacts = ContactsSource.load()
+            default: break
+            }
         }
-        if all || set.contains(.bookmarks) { bookmarks = ChromeBookmarks.items(ChromeBookmarks.load()) }
-        if all || set.contains(.contacts) { contacts = ContactsSource.load() }
+        if let a = r.apps { appList = a; apps = AppScanner.items(a) }
+        if let p = r.panes { paneList = p; panes = SettingsScanner.items(p) }
+        if let b = r.bookmarks { bookmarks = b }
+        if let c = r.contacts { contacts = c }
         let catalog = Catalog(apps + panes + Command.items() + bookmarks + contacts)
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
-        Log.info("index \(set): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms")
+        Log.info("index \(set): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms (apps \(Int(r.ms[0])), panes \(Int(r.ms[1])), bookmarks \(Int(r.ms[2])), contacts \(Int(r.ms[3])) ms)")
         let al = appList, pl = paneList
         DispatchQueue.main.async { MainActor.assumeIsolated { self.onCatalog?(catalog, al, pl) } }
     }

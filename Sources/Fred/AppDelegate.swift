@@ -33,14 +33,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let t0 = nowNanos()
-        engine = Engine()
-        launcher = Launcher(engine: engine)
+        var marks: [(String, UInt64)] = []
+        func mark(_ s: String) { marks.append((s, nowNanos())) }
 
+        // Indexing first: it runs on its own queue and overlaps everything below.
+        indexer.onCatalog = { [weak self] c, apps, panes in
+            self?.engine.setCatalog(c, apps: apps, panes: panes)
+        }
+        indexer.start()
+        mark("indexer")
+
+        engine = Engine()
+        mark("engine")
+        launcher = Launcher(engine: engine)
+        mark("launcher ui")
         HotKeys.register(keyCode: Self.launcherKey.code, modifiers: Self.launcherKey.mods) { [weak self] t in
             self?.clipboard?.hide()
             self?.launcher.toggle(eventTime: t)
             self?.retryMissingSources()
         }
+        mark("hotkey")
 
         clipboard = ClipboardController(engine: engine)
         clipboard?.startMonitoring()
@@ -48,34 +60,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.launcher.hide()
             self?.clipboard?.toggle()
         }
+        mark("clipboard")
         engine.onTitles = { [weak self] t in self?.launcher.list.titles = t }
         engine.onAtlas = { [weak self] a in
             self?.launcher.list.atlas = a
             self?.clipboard?.list.atlas = a
         }
-
         engine.onReady = { [weak self] in
             self?.launcher.warmUp()
             self?.clipboard?.warmUp()
             Log.info("ready \((nowNanos() - t0) / 1000) µs after launch")
         }
-        indexer.onCatalog = { [weak self] c, apps, panes in
-            self?.engine.setCatalog(c, apps: apps, panes: panes)
-        }
-        indexer.start()
 
         // Fred must answer a hotkey instantly at any time: opt out of App Nap and
         // timer coalescing that would otherwise park an idle background app.
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
             reason: "Fred answers global hotkeys")
-
         control = ControlServer(app: self)
         control?.start()
+        mark("control")
 
-        LoginItem.ensureRegistered()
+        var line = "launched in \((nowNanos() - t0) / 1000) µs:"
+        var prev = t0
+        for (n, t) in marks { line += " \(n) \((t - prev) / 1000)"; prev = t }
+        Log.info(line)
 
-        Permissions.requestMissing()
-        Log.info("launched in \((nowNanos() - t0) / 1000) µs\n\(Permissions.report())")
+        // Not latency-relevant: after the first run-loop turn.
+        DispatchQueue.main.async {
+            LoginItem.ensureRegistered()
+            Permissions.requestMissing()
+            Log.info(Permissions.report())
+        }
     }
 }

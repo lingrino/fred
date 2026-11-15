@@ -42,24 +42,16 @@ public enum AppScanner {
     }
 
     public static func scan() -> [App] {
-        var found: [App] = []
-        var seenIDs = Set<String>()
+        // 1. Collect candidate bundle URLs (cheap readdir walk), in priority order.
+        var candidates: [URL] = []
         var seenPaths = Set<String>()
-        func consider(_ url: URL) {
-            let path = url.path
-            guard seenPaths.insert(path).inserted, let app = load(url) else { return }
-            if let id = app.bundleID {
-                guard id != ownBundleID, seenIDs.insert(id).inserted else { return }
-            }
-            found.append(app)
-        }
         let fm = FileManager.default
         func walk(_ dir: URL, _ depth: Int) {
             guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
             for name in names where !name.hasPrefix(".") {
                 let url = dir.appendingPathComponent(name)
                 if name.hasSuffix(".app") {
-                    consider(url)
+                    if seenPaths.insert(url.path).inserted { candidates.append(url) }
                 } else if depth > 1 {
                     var isDir: ObjCBool = false
                     if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
@@ -69,7 +61,24 @@ public enum AppScanner {
             }
         }
         for r in roots { walk(URL(fileURLWithPath: r.path, isDirectory: true), r.depth) }
-        for p in extras { consider(URL(fileURLWithPath: p, isDirectory: true)) }
+        for p in extras where seenPaths.insert(p).inserted { candidates.append(URL(fileURLWithPath: p, isDirectory: true)) }
+
+        // 2. Read each bundle's Info.plist + display name in parallel (the slow part).
+        let n = candidates.count
+        let loaded = UnsafeMutableBufferPointer<App?>.allocate(capacity: n)
+        loaded.initialize(repeating: nil)
+        defer { loaded.deinitialize(); loaded.deallocate() }
+        DispatchQueue.concurrentPerform(iterations: n) { i in loaded[i] = load(candidates[i]) }
+
+        // 3. Dedupe by bundle id, keeping the first (highest-priority root).
+        var found: [App] = []
+        var seenIDs = Set<String>()
+        for case let app? in loaded {
+            if let id = app.bundleID {
+                guard id != ownBundleID, seenIDs.insert(id).inserted else { continue }
+            }
+            found.append(app)
+        }
         return found
     }
 

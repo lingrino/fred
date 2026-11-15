@@ -25,6 +25,7 @@ class FloatingPanel: NSPanel {
     let maxHeight: CGFloat
     private let root = FlippedView()
     private var glasses: [(height: CGFloat, view: NSView)] = []
+    private var singleResizable = false
     private var current: NSView?
     /// Backdrop A/B (`defaults write dev.fred.Fred debugBackdrop <name>`): "vibrancy"
     /// (default: NSVisualEffectView, state pinned active), "glass" (NSGlassEffectView per
@@ -54,7 +55,10 @@ class FloatingPanel: NSPanel {
 
         root.frame = NSRect(x: 0, y: 0, width: width, height: maxHeight)
         root.wantsLayer = true
-        let hs = Self.backdrop == "oneglass" ? [heights.max() ?? 64] : Array(Set(heights)).sorted()
+        // Glass re-renders when resized, so it gets one pre-built view per height.
+        // Vibrancy resizes cheaply: one view, resized.
+        singleResizable = Self.backdrop == "vibrancy" || Self.backdrop == "plain"
+        let hs = Self.backdrop == "oneglass" || singleResizable ? [heights.max() ?? 64] : Array(Set(heights)).sorted()
         for h in hs {
             let frame = NSRect(x: 0, y: 0, width: width, height: h)
             let g: NSView
@@ -174,6 +178,13 @@ class FloatingPanel: NSPanel {
 
     /// Shows the glass whose height is the smallest one ≥ `h`.
     func setHeight(_ h: CGFloat) {
+        if singleResizable, let g = glasses.first?.view {
+            if current !== g { g.isHidden = false; current = g }
+            guard abs(g.frame.height - h) > 0.5 else { return }
+            g.frame = NSRect(x: 0, y: 0, width: frame.width, height: min(h, maxHeight))
+            invalidateShadow()
+            return
+        }
         guard let g = (glasses.first { $0.height >= h - 0.5 } ?? glasses.last)?.view, g !== current else { return }
         g.isHidden = false
         current?.isHidden = true
