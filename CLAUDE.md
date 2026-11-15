@@ -108,8 +108,9 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
 - 1-char queries: EXACT/PREFIX (+WORDPREFIX except bookmarks). 2 chars: up to ACRONYM.
   FUZZY needs ≥3 chars, first char on a word start, ≤ m/3 gaps in the tightest window.
 - Learning points `min(300, 15·log2(1+F) + 50·A)`, full for tiers ≥ ACRONYM, ½ substring,
-  ¼ fuzzy. Latch (+5000) when one item owns an exact query. Results more than 350 below
-  the best unpinned score are dropped.
+  ¼ fuzzy. Latch (+5000) when one item owns an exact query. Weak results (substring/fuzzy,
+  raw tier < ACRONYM) more than 350 below the best unpinned score are dropped; strong
+  tiers are never cut ("lock" shows the exact "Lock" AND the prefix "Lock Screen").
 - Tests in `Tests/FredCoreTests/MatcherTests.swift` pin the intended orderings. Add a test
   for every ranking complaint before changing constants.
 

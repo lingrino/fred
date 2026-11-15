@@ -92,6 +92,24 @@ import Testing
         #expect(Calculator.evaluate("-(-(2))+1")?.display == "3")
     }
 
+    @Test func exactMatchDoesNotHidePrefixMatches() {
+        // "lock": the exact "Lock" command must not push the "Lock Screen" pane out.
+        let c = Catalog([
+            .init(kind: .command, title: "Lock", secondary: ["Lock Screen"], payload: "lock"),
+            .init(kind: .settings, title: "Lock Screen", payload: "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension"),
+            .init(kind: .app, title: "Clock", payload: "/System/Applications/Clock.app"),
+        ])
+        let s = Searcher(c)
+        let l = Learning(logURL: nil)
+        for i in 0..<5 { l.record(.init(time: 1_800_000_000 + UInt32(i), key: c.keys[0], query: Fold.query("lock"), row: 0)) }
+        l.prepare(catalog: c, into: s, now: 1_800_000_100)
+        let top = s.search(Matcher.Query("lock"), k: 5, learn: l, now: 1_800_000_100)
+        let titles = (0..<top.count).map { c.titles[top.item($0)] }
+        #expect(titles.prefix(2) == ["Lock", "Lock Screen"])
+        // A weak (substring) match is still cut when strong matches exist: "Clock".
+        #expect(!titles.contains("Clock"))
+    }
+
     @Test func pruneHandlesOutOfOrderTimes() {
         let s = ClipStore(dir: nil)
         let now: UInt32 = 1_900_000_000

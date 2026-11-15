@@ -9,6 +9,8 @@ public struct TopK: Sendable {
     var items = InlineArray<9, Int32>(repeating: -1)
     var scores = InlineArray<9, Int32>(repeating: .min)
     var ties = InlineArray<9, Int32>(repeating: .min)
+    /// Tier score before learning (decides whether a result is "weak": substring/fuzzy).
+    var raws = InlineArray<9, Int32>(repeating: .min)
 
     public init(k: Int) { precondition(k > 0 && k <= Self.capacity); self.k = k }
 
@@ -18,12 +20,19 @@ public struct TopK: Sendable {
     /// Score an insertion must reach to enter (when full).
     @inline(__always) var floor: Int32 { count < k ? .min : scores[k - 1] }
 
-    mutating func dropBelow(_ threshold: Int32) {
-        while count > 0 && scores[count - 1] < threshold { count -= 1 }
+    /// Removes weak results (raw tier below ACRONYM) scoring under `threshold`. Strong
+    /// results — exact, prefix, word-prefix, acronym — are never removed.
+    mutating func dropWeak(below threshold: Int32) {
+        var w = 0
+        for r in 0..<count where raws[r] >= Matcher.Tier.acronym.rawValue || scores[r] >= threshold {
+            if w != r { items[w] = items[r]; scores[w] = scores[r]; ties[w] = ties[r]; raws[w] = raws[r] }
+            w += 1
+        }
+        count = w
     }
 
     @inline(__always)
-    mutating func insert(item: Int32, score: Int32, tie: Int32) {
+    mutating func insert(item: Int32, score: Int32, tie: Int32, raw: Int32 = .max) {
         if count == k && (score < scores[k - 1] || (score == scores[k - 1] && tie <= ties[k - 1])) { return }
         // Same item already present? Keep the better one.
         var at = -1
@@ -36,10 +45,10 @@ public struct TopK: Sendable {
         }
         var i = at
         while i > 0 && (scores[i - 1] < score || (scores[i - 1] == score && ties[i - 1] < tie)) {
-            items[i] = items[i - 1]; scores[i] = scores[i - 1]; ties[i] = ties[i - 1]
+            items[i] = items[i - 1]; scores[i] = scores[i - 1]; ties[i] = ties[i - 1]; raws[i] = raws[i - 1]
             i -= 1
         }
-        items[i] = item; scores[i] = score; ties[i] = tie
+        items[i] = item; scores[i] = score; ties[i] = tie; raws[i] = raw
     }
 }
 
@@ -49,8 +58,10 @@ public enum Ranking {
     /// contacts, bookmarks.
     static let kindPrior: InlineArray<8, Int32> = [20, 10, 15, 0, 5, 0, 0, 0]
     //                                     app settings command bookmark contact
-    /// Results scoring more than this below the best are dropped: when "rea" has strong
-    /// prefix hits, scattered fuzzy hits are noise, but they stay when nothing is better.
+    /// Weak results (substring/fuzzy) scoring more than this below the best are dropped:
+    /// when "rea" has strong prefix hits, scattered substring hits are noise, but they stay
+    /// when nothing is better. Strong tiers are never cut ("lock" keeps "Lock Screen"
+    /// next to the exact "Lock").
     static let relativeCutoff: Int32 = 350
     static let maxLearned: Int32 = 300
     static let latchBonus: Int32 = 5000
@@ -65,14 +76,14 @@ public enum Ranking {
         return base + fine - (role == 2 ? 100 : 0)
     }
 
-    /// The weakest tier whose best possible final score (fine 99, this item's learning)
-    /// still reaches `floor`. Secondary-role entries score 100 lower, so this is an upper
-    /// bound for them too.
+    /// The weakest tier still worth computing for an entry: its best possible final score
+    /// (fine 99, this item's learning) must reach the top-K floor, and for weak tiers also
+    /// the relative-cutoff floor. Secondary-role entries score 100 lower, so this is an
+    /// upper bound for them too.
     @inline(__always)
-    static func lowestUsefulTier(floor: Int32, learned: Int32) -> Matcher.Tier {
-        if floor == .min { return .fuzzy }
-        if Matcher.Tier.fuzzy.rawValue + 99 + learned / 4 >= floor { return .fuzzy }
-        if Matcher.Tier.substring.rawValue + 99 + learned / 2 >= floor { return .substring }
+    static func lowestUsefulTier(floor: Int32, weakFloor: Int32, learned: Int32) -> Matcher.Tier {
+        if Matcher.Tier.fuzzy.rawValue + 99 + learned / 4 >= weakFloor { return .fuzzy }
+        if Matcher.Tier.substring.rawValue + 99 + learned / 2 >= weakFloor { return .substring }
         if Matcher.Tier.acronym.rawValue + 99 + learned >= floor { return .acronym }
         return .wordPrefix
     }
@@ -171,8 +182,9 @@ public final class Searcher {
                     let learned = min(base[item] &+ sparse[item], Ranking.maxLearned)
                     // Branch and bound: skip tiers that can't beat what we already have,
                     // even at their best fine score with this item's learning.
-                    let floor = max(top.floor, bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
-                    let lowest = Ranking.lowestUsefulTier(floor: floor, learned: learned)
+                    let floor = top.floor
+                    let weakFloor = max(floor, bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
+                    let lowest = Ranking.lowestUsefulTier(floor: floor, weakFloor: weakFloor, learned: learned)
                     if !initialHit && lowest.rawValue > Matcher.Tier.substring.rawValue { continue }
                     let raw = Matcher.score(query, qp, cp, bytes + Int(sp >> 8), n, starts[e],
                                             allowLoose: kind != Int(Catalog.Kind.bookmark.rawValue), scratch,
@@ -183,12 +195,12 @@ public final class Searcher {
                     if final > bestUnpinned { bestUnpinned = final }
                     if item == latch && s >= Matcher.Tier.acronym.rawValue { final += Ranking.latchBonus }
                     // Ties: more learned first, then shorter entries.
-                    top.insert(item: Int32(item), score: final, tie: learned << 8 | Int32(255 - n))
+                    top.insert(item: Int32(item), score: final, tie: learned << 8 | Int32(255 - n), raw: s)
                 }
             }
         }
         // Relative cutoff ignores the latch pin, so a pinned row doesn't hide the rest.
-        top.dropBelow(bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
+        top.dropWeak(below: bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
         return top
     }
 }
