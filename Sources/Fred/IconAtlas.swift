@@ -48,7 +48,7 @@ final class IconAtlas: @unchecked Sendable {
         /// Tile color (macOS Settings-style rounded square behind a white glyph).
         var tint: NSColor {
             switch self {
-            case .bookmark: .systemBlue
+            case .bookmark: .systemTeal
             case .contact: .systemGray
             case .calculator: .systemOrange
             case .emptyTrash, .forceQuit: .systemRed
