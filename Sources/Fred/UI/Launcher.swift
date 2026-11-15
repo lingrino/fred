@@ -19,13 +19,15 @@ final class Launcher: NSObject, QueryFieldDelegate {
     /// index is only a hint — activation resolves the key against the current catalog.
     enum Ref {
         case item(Int, key: UInt64)
-        case calc(Calculator.Result)
+        case answer(InstantAnswer)
         case field(ContactCard.Field)
         case process(NSRunningApplication)
     }
     enum Mode { case search, contact(ContactCard), forceQuit }
 
     private var refs: [Ref] = []
+    /// Opens the Fred Settings window (wired by AppDelegate).
+    var onOpenSettings: (() -> Void)?
     private var mode = Mode.search
     private var query = Matcher.Query(folded: [])
     private var runningApps: [NSRunningApplication] = []
@@ -183,16 +185,20 @@ final class Launcher: NSObject, QueryFieldDelegate {
     private func renderSearch(_ text: String) {
         var rows: [ResultList.Row] = []
         var r: [Ref] = []
-        if let c = Calculator.evaluate(text) {
-            rows.append(.init(title: c.display, icon: .atlas(engine.slot(.calculator))))
-            r.append(.calc(c))
+        // Instant answer row: math first, then unit/data/time-zone conversion.
+        let answer = Calculator.evaluate(text).map { InstantAnswer(kind: .math, title: $0.display, detail: nil, copy: $0.copy) }
+            ?? Converter.evaluate(text)
+        if let a = answer {
+            let icon: IconAtlas.Static = switch a.kind { case .math: .calculator; case .unit: .convert; case .time: .clock }
+            rows.append(.init(title: a.title, detail: a.detail, icon: .atlas(engine.slot(icon))))
+            r.append(.answer(a))
         }
         if query.count > 0 {
             let top = engine.searcher.search(query, k: Theme.maxRows - rows.count, learn: engine.learning, now: engine.now)
             let cat = engine.searcher.catalog
             for i in 0..<top.count {
                 let item = top.item(i)
-                rows.append(.init(title: cat.titles[item], icon: .atlas(engine.icon(item)), titleItem: item))
+                rows.append(.init(title: cat.titles[item], detail: cat.details[item], icon: .atlas(engine.icon(item)), titleItem: item))
                 r.append(.item(item, key: cat.keys[item]))
             }
         }
@@ -243,6 +249,12 @@ final class Launcher: NSObject, QueryFieldDelegate {
             Actions.open(url: "addressbook://" + card.identifier)
             return true
         }
+        // ⌘, opens Fred Settings from any mode.
+        if e.charactersIgnoringModifiers == ",", mods == .command {
+            hide()
+            onOpenSettings?()
+            return true
+        }
         // ⌘C on a contact card: copy the selected field's value (not the query text) and close.
         if e.charactersIgnoringModifiers == "c", mods == .command, case .contact = mode,
            list.selected < refs.count, case .field(let f) = refs[list.selected] {
@@ -258,9 +270,9 @@ final class Launcher: NSObject, QueryFieldDelegate {
     func activate(_ i: Int, modifiers: NSEvent.ModifierFlags) {
         guard i >= 0, i < refs.count else { return }
         switch refs[i] {
-        case .calc(let c):
+        case .answer(let a):
             hide()
-            Actions.copy(c.copy)
+            Actions.copy(a.copy)
         case .item(let hint, let key):
             let cat = engine.searcher.catalog
             let item: Int
@@ -269,14 +281,17 @@ final class Launcher: NSObject, QueryFieldDelegate {
             else { queryChanged(); return }          // gone (app uninstalled): just refresh
             // Learning's "row" is the position among catalog results (the calculator row
             // isn't one).
-            let calcRows = refs.prefix(i).filter { if case .calc = $0 { true } else { false } }.count
+            let calcRows = refs.prefix(i).filter { if case .answer = $0 { true } else { false } }.count
             engine.recordPick(item: item, query: query.bytes, row: i - calcRows)
             let payload = cat.payloads[item]
             switch cat.kinds[item] {
             case .app:
                 hide()
                 if modifiers.contains(.command) { Actions.revealInFinder(path: payload) } else { Actions.openApp(path: payload) }
-            case .settings, .bookmark:
+            case .settings:
+                hide()
+                Actions.open(url: SettingsScanner.openURL(payload))
+            case .bookmark:
                 hide()
                 Actions.open(url: payload)
             case .contact:
@@ -284,15 +299,20 @@ final class Launcher: NSObject, QueryFieldDelegate {
             case .command:
                 guard let c = Command(rawValue: payload) else { return }
                 if c == .forceQuit { enterForceQuit(); return }
+                if c == .fredSettings { hide(); onOpenSettings?(); return }
                 hide()
                 Actions.run(c)
             }
         case .field(let f):
-            // Like clipboard history: put the value on the pasteboard and paste it into
-            // the app you were in (still frontmost — the panel never activated Fred).
             hide()
-            Actions.copy(f.value)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { Actions.postPaste() }
+            if modifiers.contains(.command) {
+                // ⌘↩: hand the value to its app — call, email, map, browser.
+                ContactCard.open(f)
+            } else {
+                // ↩: type the value into the app you were in (still frontmost — the panel
+                // never activated Fred). Typed, not pasted: the clipboard stays untouched.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { Actions.typeText(f.value) }
+            }
         case .process(let app):
             hide()
             if !Actions.dryRun { app.forceTerminate() } else { Log.info("dry run: force quit \(app.localizedName ?? "?")") }

@@ -22,6 +22,21 @@ struct ContactCard {
         CNContactJobTitleKey as CNKeyDescriptor,
     ]
 
+    /// ⌘↩ on a field: open it with its natural app.
+    @MainActor
+    static func open(_ f: Field) {
+        let enc = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s }
+        switch f.icon {
+        case .phone:
+            let digits = f.value.filter { $0.isNumber || $0 == "+" }
+            Actions.open(url: "tel:" + digits)
+        case .email: Actions.open(url: "mailto:" + f.value)
+        case .address: Actions.open(url: "maps://?q=" + enc(f.value))
+        case .url: Actions.open(url: f.value.contains("://") ? f.value : "https://" + f.value)
+        default: Actions.copy(f.value)
+        }
+    }
+
     static func load(identifier: String, name: String) -> ContactCard? {
         guard let c = try? CNContactStore().unifiedContact(withIdentifier: identifier, keysToFetch: keys) else { return nil }
         var f: [Field] = []

@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let indexer = Indexer()
     var control: ControlServer?
     var clipboard: ClipboardController?
+    lazy var settings = SettingsWindowController(app: self)
+    let launchedAt = Date()
     private var activity: NSObjectProtocol?
 
     /// ⌘Space launcher, ⌘⇧C clipboard.
@@ -67,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mark("clipboard")
         engine.onTitles = { [weak self] t in self?.launcher.list.titles = t }
         engine.onCatalogChanged = { [weak self] in self?.launcher?.catalogChanged() }
+        launcher.onOpenSettings = { [weak self] in self?.settings.show() }
+        clipboard?.onOpenSettings = { [weak self] in self?.settings.show() }
         engine.onAtlas = { [weak self] a in
             self?.launcher.list.atlas = a
             self?.clipboard?.list.atlas = a
@@ -97,5 +101,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.requestMissing()
             Log.info(Permissions.report())
         }
+        DispatchQueue.global(qos: .utility).async { Converter.warm() }
     }
 }

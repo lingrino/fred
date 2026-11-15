@@ -110,6 +110,39 @@ import Testing
         #expect(!titles.contains("Clock"))
     }
 
+    @Test func subSettingsRankBelowPanesAndApps() {
+        // Sub-settings fill in below real apps and panes: "hot corners" is a keyword of
+        // the Desktop & Dock pane and of an Accessibility sub-setting — the pane wins.
+        let c = Catalog([
+            .init(kind: .settings, title: "Dwell Corners", payload: "a#Dwell Corners", detail: "Accessibility", weak: true, weakKeywords: ["hot corners"]),
+            .init(kind: .settings, title: "Desktop & Dock", secondary: ["Hot Corners"], payload: "dock"),
+            .init(kind: .settings, title: "Clock", payload: "cc#Clock", detail: "Control Center", weak: true),
+            .init(kind: .app, title: "Clock", payload: "/System/Applications/Clock.app"),
+            .init(kind: .settings, title: "Displays", payload: "displays"),
+            .init(kind: .settings, title: "Large clock", payload: "lock#Large clock", detail: "Lock Screen", weak: true, weakKeywords: ["display"]),
+            .init(kind: .settings, title: "Display", payload: "a11y#Display", detail: "Accessibility", weak: true),
+        ])
+        let s = Searcher(c)
+        let l = Learning(logURL: nil)
+        func top(_ q: String) -> [String] {
+            let r = s.search(Matcher.Query(q), k: 5, learn: l, now: 1_800_000_000)
+            return (0..<r.count).map { c.titles[r.item($0)] }
+        }
+        #expect(top("hot corners").first == "Desktop & Dock")
+        #expect(c.kinds[s.search(Matcher.Query("clock"), k: 5, learn: l, now: 1_800_000_000).item(0)] == .app)
+        // A sub-item's keyword never outranks a pane title prefix.
+        // "display": the Displays pane (prefix) before the sub-setting titled "Display"
+        // (exact), before a sub-setting that merely has "display" as a keyword.
+        #expect(top("display") == ["Displays", "Display", "Large clock"])
+        // A pane's own search terms beat sub-items' terms: "dark" → Appearance first.
+        let c2 = Catalog([
+            .init(kind: .settings, title: "Appearance (Keyboard)", payload: "kb#Appearance", detail: "Keyboard", weak: true, weakKeywords: ["dark"]),
+            .init(kind: .settings, title: "Appearance", payload: "appearance", weakKeywords: ["dark", "Dark Mode"]),
+        ])
+        let s2 = Searcher(c2)
+        #expect(c2.titles[s2.search(Matcher.Query("dark"), k: 5, learn: l, now: 1_800_000_000).item(0)] == "Appearance")
+    }
+
     @Test func pruneHandlesOutOfOrderTimes() {
         let s = ClipStore(dir: nil)
         let now: UInt32 = 1_900_000_000

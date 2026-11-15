@@ -105,7 +105,8 @@ final class Engine {
             switch c.kinds[i] {
             case .app: icons[i] = a.slot(path: p) ?? generic
             case .settings:
-                let id = p.hasPrefix("x-apple.systempreferences:") ? String(p.dropFirst(26)) : p
+                let u = SettingsScanner.openURL(p)
+                let id = u.hasPrefix("x-apple.systempreferences:") ? String(u.dropFirst(26)) : u
                 icons[i] = a.slot(path: SettingsScanner.extensionsDir + "/" + paneFile(id)) ?? paneSlot(id, a) ?? generic
             case .bookmark: icons[i] = a.slot(.bookmark)
             case .contact: icons[i] = a.slot(.contact)
@@ -117,7 +118,7 @@ final class Engine {
                 case .restart: icons[i] = a.slot(.restart)
                 case .shutDown: icons[i] = a.slot(.shutDown)
                 case .forceQuit: icons[i] = a.slot(.forceQuit)
-                case .quitFred, .restartFred, .none: icons[i] = a.slot(path: Bundle.main.bundlePath) ?? a.slot(.fred)
+                case .quitFred, .restartFred, .fredSettings, .none: icons[i] = a.slot(path: Bundle.main.bundlePath) ?? a.slot(.fred)
                 }
             }
         }

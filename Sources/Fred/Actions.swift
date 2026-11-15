@@ -35,7 +35,7 @@ enum Actions {
     static var dryRun = ProcessInfo.processInfo.environment["FRED_DRY_RUN"] == "1"
 
     static func run(_ c: Command) {
-        if dryRun && c != .quitFred && c != .restartFred && c != .forceQuit {
+        if dryRun && c != .quitFred && c != .restartFred && c != .forceQuit && c != .fredSettings {
             Log.info("dry run: \(c.rawValue)")
             return
         }
@@ -47,7 +47,7 @@ enum Actions {
         case .emptyTrash: emptyTrash()
         case .quitFred: NSApp.terminate(nil)
         case .restartFred: relaunch()
-        case .forceQuit: break   // handled by the launcher (mode switch)
+        case .forceQuit, .fredSettings: break   // handled by the launcher
         }
     }
 
@@ -117,6 +117,32 @@ enum Actions {
         up?.flags = .maskCommand
         down?.post(tap: .cgSessionEventTap)
         up?.post(tap: .cgSessionEventTap)
+    }
+
+    /// Types `text` into whatever has keyboard focus, without touching the clipboard:
+    /// keyboard events carrying a Unicode string (≤ 20 UTF-16 units each — the limit of
+    /// CGEventKeyboardSetUnicodeString), split on character boundaries. Needs the same
+    /// PostEvent permission as ⌘V.
+    static func typeText(_ text: String) {
+        guard CGPreflightPostEventAccess() else { Log.error("type: no PostEvent permission"); return }
+        let src = CGEventSource(stateID: .combinedSessionState)
+        var chunk: [UniChar] = []
+        func flush() {
+            guard !chunk.isEmpty else { return }
+            for down in [true, false] {
+                guard let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down) else { continue }
+                e.flags = []
+                chunk.withUnsafeBufferPointer { e.keyboardSetUnicodeString(stringLength: $0.count, unicodeString: $0.baseAddress) }
+                e.post(tap: .cgSessionEventTap)
+            }
+            chunk.removeAll(keepingCapacity: true)
+        }
+        for ch in text {
+            let u = Array(String(ch).utf16)
+            if chunk.count + u.count > 20 { flush() }
+            chunk += u
+        }
+        flush()
     }
 
     /// Key code that produces "v" in the current layout (Dvorak etc.), default ANSI V.

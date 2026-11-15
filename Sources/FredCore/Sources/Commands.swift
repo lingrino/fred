@@ -10,6 +10,7 @@ public enum Command: String, CaseIterable, Sendable {
     case forceQuit = "forcequit"
     case quitFred = "quitfred"
     case restartFred = "restartfred"
+    case fredSettings = "fredsettings"
 
     public var title: String {
         switch self {
@@ -21,6 +22,7 @@ public enum Command: String, CaseIterable, Sendable {
         case .forceQuit: "Force Quit…"
         case .quitFred: "Quit Fred"
         case .restartFred: "Restart Fred"
+        case .fredSettings: "Fred Settings"
         }
     }
 
@@ -42,6 +44,7 @@ public enum Command: String, CaseIterable, Sendable {
         case .shutDown: ["Power Off"]
         case .forceQuit: ["Kill"]
         case .restartFred: ["Reload Fred"]
+        case .fredSettings: ["Fred Preferences", "Fred Permissions"]
         case .lock: ["Lock Screen"]
         default: []
         }

@@ -105,6 +105,12 @@ final class ControlServer: @unchecked Sendable {
             let top = e.searcher.search(q, k: 9, learn: e.learning, now: e.now)
             let dt = nowNanos() - t0
             var s = "\(top.count) results in \(dt / 1000) µs\n"
+            let a0 = nowNanos()
+            if let v = Calculator.evaluate(arg) {
+                s += "  answer\tmath\t\(v)\n"
+            } else if let a = Converter.evaluate(arg) {
+                s += "  answer\t\(a.kind)\t\(a.title)\t\(a.detail)\t(\((nowNanos() - a0) / 1000) µs)\n"
+            }
             for i in 0..<top.count {
                 let it = top.item(i)
                 s += "  \(top.score(i))\t\(e.catalog.kinds[it])\t\(e.catalog.titles[it])\t(learned \(e.searcher.learned(it)))\n"
@@ -181,6 +187,9 @@ final class ControlServer: @unchecked Sendable {
             l.commitNow()
             if !was { l.panel.park() }
             return found.isEmpty ? "no animations" : found.joined(separator: "\n")
+        case "settings":   // `settings` shows the window (takes focus); `settings <png>` renders offscreen
+            if arg.isEmpty { app.settings.show(); return "ok" }
+            return app.settings.snapshot(to: arg)
         case "glassbench":
             return GlassBench.run()
         case "shadow":
@@ -193,11 +202,6 @@ final class ControlServer: @unchecked Sendable {
     }
 
     private func residentMB() -> String {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
-        let kr = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
-        }
-        return kr == KERN_SUCCESS ? String(format: "%.1f", Double(info.phys_footprint) / 1_048_576) : "?"
+        Diagnostics.footprintMB().map { String(format: "%.1f", $0) } ?? "?"
     }
 }

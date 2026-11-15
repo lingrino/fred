@@ -21,7 +21,7 @@ final class IconAtlas: @unchecked Sendable {
 
     enum Static: String, CaseIterable {
         case bookmark, contact, calculator, emptyTrash, sleep, lock, restart, shutDown, forceQuit, fred, generic, text, image, files
-        case phone, email, address, url, birthday
+        case phone, email, address, url, birthday, convert, clock
         var symbol: String {
             switch self {
             case .bookmark: "bookmark.fill"
@@ -43,6 +43,8 @@ final class IconAtlas: @unchecked Sendable {
             case .address: "house.fill"
             case .url: "link"
             case .birthday: "gift.fill"
+            case .convert: "arrow.left.arrow.right"
+            case .clock: "clock.fill"
             }
         }
         /// Tile color (macOS Settings-style rounded square behind a white glyph).
@@ -65,6 +67,8 @@ final class IconAtlas: @unchecked Sendable {
             case .address: .systemBrown
             case .url: .systemIndigo
             case .birthday: .systemPink
+            case .convert: .systemTeal
+            case .clock: .systemIndigo
             }
         }
     }

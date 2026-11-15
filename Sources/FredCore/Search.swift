@@ -63,6 +63,11 @@ public enum Ranking {
     /// when nothing is better. Strong tiers are never cut ("lock" keeps "Lock Screen"
     /// next to the exact "Lock").
     static let relativeCutoff: Int32 = 350
+    /// Per entry role: title, alias, secondary (one tier down), sub-item title, sub-item
+    /// keyword, pane search term. Sub-items fill rows below real apps/panes: an exact
+    /// sub-setting (1300−450) lands just under a pane prefix match (900+), search-term
+    /// hits under that, the pane's own terms first among those.
+    static let rolePenalty: InlineArray<8, Int32> = [0, 0, 100, 450, 500, 495, 0, 0]
     static let maxLearned: Int32 = 300
     static let latchBonus: Int32 = 5000
 
@@ -73,7 +78,7 @@ public enum Ranking {
         var fine = s - base + kindPrior[kind]
         if role == 1 { fine -= 5 }
         fine = max(0, min(99, fine))   // ≤ fineMax(79) + prior(20)
-        return base + fine - (role == 2 ? 100 : 0)
+        return base + fine - rolePenalty[role & 7]
     }
 
     /// The weakest tier still worth computing for an entry: its best possible final score
@@ -181,9 +186,12 @@ public final class Searcher {
                     let item = Int(packed & 0xFF_FFFF)
                     let learned = min(base[item] &+ sparse[item], Ranking.maxLearned)
                     // Branch and bound: skip tiers that can't beat what we already have,
-                    // even at their best fine score with this item's learning.
-                    let floor = top.floor
-                    let weakFloor = max(floor, bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
+                    // even at their best fine score with this item's learning. The role
+                    // penalty raises the bar (sub-settings mostly skip once 5 rows are good).
+                    let penalty = Ranking.rolePenalty[Int(packed >> 28) & 7]
+                    let floor = top.floor &+ penalty
+                    if item != latch && Matcher.Tier.exact.rawValue + 99 + learned < floor { continue }
+                    let weakFloor = max(floor, bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff &+ penalty)
                     let lowest = Ranking.lowestUsefulTier(floor: floor, weakFloor: weakFloor, learned: learned)
                     if !initialHit && lowest.rawValue > Matcher.Tier.substring.rawValue { continue }
                     let raw = Matcher.score(query, qp, cp, bytes + Int(sp >> 8), n, starts[e],

@@ -32,6 +32,9 @@ public final class SearchIndex: @unchecked Sendable {
         case primary = 0    // the title
         case alias = 1      // derived name: file name, CFBundleName, nickname (−5 fine)
         case secondary = 2  // weaker field: bookmark host, contact email (one tier lower)
+        case subTitle = 3   // sub-item title ("True Tone" in Displays): −450, below app/pane prefixes
+        case subKeyword = 4 // sub-item keyword (System Settings search terms): −500
+        case paneTerm = 5   // a pane's own search terms ("Dark Mode" → Appearance): −495
     }
 
     /// One searchable string and the item it belongs to.

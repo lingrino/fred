@@ -67,6 +67,7 @@ enum Bench {
 
         clipBench(&rng)
         calcBench()
+        converterBench()
     }
 
     static func clipBench(_ rng: inout SplitMix) {
@@ -107,6 +108,27 @@ enum Bench {
         }
         samples.sort()
         print("\ncalculator: p50 \(fmt(samples[samples.count / 2])) (includes result formatting)")
+    }
+
+    /// Every keystroke runs the converter (after the calculator declines), so typical
+    /// non-conversion queries matter as much as real conversions.
+    static func converterBench() {
+        print("\nconverter (µs)          p0      p50     p99")
+        let utc = TimeZone(identifier: "UTC")!
+        for q in ["safari", "time machine", "2fold", "macos 27", "5 km in mi", "1 GiB to MB", "100 mbps in MB/s",
+                  "72 f", "90 min", "3pm pst in tokyo", "tokyo time", "now in london"] {
+            _ = Converter.evaluate(q, zone: utc)   // first-use table setup
+            var samples: [UInt64] = []
+            for _ in 0..<3000 {
+                let a = DispatchTime.now().uptimeNanoseconds
+                let r = Converter.evaluate(q, zone: utc)
+                let b = DispatchTime.now().uptimeNanoseconds
+                blackHole(r)
+                samples.append(b - a)
+            }
+            samples.sort()
+            print(pad("\"\(q)\"", 22), fmt(samples[0]), fmt(samples[samples.count / 2]), fmt(samples[samples.count * 99 / 100]))
+        }
     }
 
     static func syntheticBookmarks(_ n: Int, _ rng: inout SplitMix) -> [Catalog.Item] {

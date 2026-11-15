@@ -8,11 +8,18 @@ preferences UI and there should not be one.
 ## What it does (and deliberately doesn't)
 
 - **Launcher** (⌘Space): one ranked list (max 5
-  rows) over apps, System Settings panes, system commands, Chrome bookmarks, contacts.
-  Inline calculator ("2+2"). Learns from picks (zoxide/Firefox-style). Enter = row 1 /
+  rows) over apps, System Settings panes and the settings inside them ("True Tone" →
+  Displays, from each pane's `.searchTerms`), system commands, Chrome bookmarks, contacts.
+  Instant-answer row: calculator ("2+2"), else `Converter` (units, data sizes/rates,
+  durations, time zones: "5 km in mi", "1 GiB to MB", "3pm pst in tokyo"; offline).
+  Learns from picks (zoxide/Firefox-style). Enter = row 1 /
   selected row, ⌘1…⌘5 = row n, ↑↓/⌃N⌃P move, Esc closes, ⌘↩ reveals an app in Finder.
-  Contact → card of phones/emails/addresses: Enter (or ⌘n/click) pastes the value into the
-  front app, ⌘C copies it and closes, ⌘O opens Contacts.app. Esc always closes Fred.
+  Contact → card of phones/emails/addresses: Enter (or ⌘n/click) TYPES the value into the
+  front app (keyboard events, clipboard untouched), ⌘C copies it and closes, ⌘↩ opens it
+  (tel:/mailto:/Maps/URL), ⌘O opens Contacts.app. Esc always closes Fred.
+  ⌘, (either panel) or the "Fred Settings" command → Fred Settings window: read-only
+  health page (each privacy grant + "Open…" to its System Settings page, hotkeys, login
+  item, index sizes, live CPU/memory/latency; 1 s timer only while open). Not a prefs UI.
   "Force Quit…" → running-app list. Moving the mouse over a row selects it (only real
   movement; rows changing under a still pointer don't steal the selection).
 - **Clipboard history** (⌘⇧C): text, images, file lists; 90 days; token-AND substring
@@ -58,6 +65,7 @@ contacts (Contacts) · postEvents ("Device Control and Data Access" = Accessibil
 macOS 27 blocks other apps from Chrome's profile dir) · finder (Automation, Empty Trash)
 · loginwindow (Automation, Sleep/Restart/Shut Down).
 Fred re-checks empty sources when the launcher opens, so grants given while running apply.
+Fred Settings (⌘,) shows the same statuses.
 
 **Never call AEDeterminePermissionToAutomateTarget or send Apple Events on the main
 thread.** While a consent prompt is on screen they block (even with askUserIfNeeded=false,
@@ -76,6 +84,7 @@ Sources/FredCore/          pure logic, no AppKit — unit-tested, benchmarked
   Learning.swift           event log → frecency (14d half-life) + query→item associations (competition, prefix lookup, latch)
   Catalog.swift            merged items (SoA) + stable FNV keys + key→item lookup
   Calculator.swift         allocation-free recursive-descent evaluator
+  Converter.swift          units/data/time-zone instant answers: byte-level parsing, offset math (no formatters)
   ClipStore.swift          clipboard history SoA + append-only log + images dir + search
   Sources/*.swift          AppScanner, SettingsScanner, Commands, ChromeBookmarks (Foundation only)
 Sources/Fred/              the app
@@ -93,6 +102,7 @@ Sources/Fred/              the app
   UI/Launcher.swift        launcher controller: keystroke → search → rows, keys, modes, actions, latency stats
   ClipboardController.swift pasteboard polling, clipboard panel + preview, paste
   Actions.swift            open, system commands (loginwindow AEs, lock, Finder), ⌘V posting
+  SettingsWindow.swift     "Fred Settings" health window (AppKit, plain NSWindow)
   ContactsSource / ContactCard / Permissions / LoginItem / ControlServer / Snapshot / Log
 Sources/FredBench/         `fredbench scan` (what sources find) and `fredbench` (benchmarks)
 ```
@@ -104,15 +114,22 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
 
 ### Ranking (FredCore/Search.swift `Ranking`, Matcher.swift)
 - Tier base + fine (0…79) + kind prior (app 20, command 15, settings 10, contact 5, bookmark 0).
-- Entry roles: title; alias (−5: file name, CFBundleName, command keywords); secondary (−100:
-  bookmark host, contact org/email, settings/command synonyms).
+- Entry roles (`Ranking.rolePenalty`): title; alias (−5 fine: file name, CFBundleName,
+  command keywords); secondary (−100: bookmark host, contact org/email, hand-written
+  settings/command synonyms); sub-setting title (−450); pane's own search terms (−495);
+  sub-setting search terms (−500). Sub-settings fill rows under real apps/panes ("display"
+  → Displays pane, then the "Display" sub-setting); with adjusted score < ACRONYM they
+  count as weak for the relative cutoff. Branch-and-bound adds the role penalty to the
+  floor, so sub-setting entries are mostly skipped once 5 good rows exist.
+- Sub-setting terms shared by ≥4 settings ("privacy", "screen") or repeating a title word
+  are dropped at scan time (`SettingsScanner.pruneKeywords`): noise and search cost.
 - 1-char queries: EXACT/PREFIX (+WORDPREFIX except bookmarks). 2 chars: up to ACRONYM.
   FUZZY needs ≥3 chars, first char on a word start, ≤ m/3 gaps in the tightest window.
 - Learning points `min(300, 15·log2(1+F) + 50·A)`, full for tiers ≥ ACRONYM, ½ substring,
   ¼ fuzzy. Latch (+5000) when one item owns an exact query. Weak results (substring/fuzzy,
   raw tier < ACRONYM) more than 350 below the best unpinned score are dropped; strong
   tiers are never cut ("lock" shows the exact "Lock" AND the prefix "Lock Screen").
-- Tests in `Tests/FredCoreTests/MatcherTests.swift` pin the intended orderings. Add a test
+- Tests in `Tests/FredCoreTests/MatcherTests.swift` (and `RegressionTests.swift`) pin the intended orderings. Add a test
   for every ranking complaint before changing constants.
 
 ## Performance rules
@@ -156,7 +173,9 @@ derivation orphans learned history — don't, or migrate.
 
 ## Control socket (`scripts/fredctl`)
 
-`stats` (incl. per-stage latency), `resetstats`, `permissions`, `request`, `query <q>`,
+`stats` (incl. per-stage latency), `resetstats`, `permissions`, `request`, `query <q>` (also
+prints the instant-answer row and its µs), `settings [png]` (no arg: show the window — takes
+focus; with a path: render it offscreen),
 `snapshot <png> [q]` (renders the content layer tree offscreen — no glass/vibrancy — and
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
 (visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
@@ -182,7 +201,11 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
 Keystroke (p50): OS delivery ~0.4–1.5 ms (outside our control) → Fred ~0.76 ms in-process:
 key handling ~0.28 ms (QueryField fast path + field text render) · search+rows ~0.04 ms ·
 draw+commit ~0.44 ms (mostly the fixed CA→window-server commit). Hotkey → frame committed
-~2.2 ms (becoming key ~1.2 ms of it). Search kernel alone: p50 8 µs over a 10.7k-entry index.
+~2.2 ms (becoming key ~1.2 ms of it). Search kernel alone (`make bench`, 2026-11-15): p50
+4–21 µs over a 13.4k-entry index; the ~600 sub-settings (+2.7k entries, long strings) cost
+~+3 µs on few-match queries. Converter: 0.04 µs for plain words, ~0.3 µs for digit
+queries that aren't conversions, ~1 µs per unit answer, ~5 µs per time answer (it was
+15/95 µs with String/DateFormatter/Calendar — keep it on bytes and offset arithmetic).
 
 What was measured and why the code looks the way it does — don't regress these:
 - NSTextField/field editor costs ~3.7 ms per key → `QueryField` (custom NSTextInputClient,

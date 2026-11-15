@@ -23,6 +23,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
     private var selected = 0
     private var offset = 0
     let searchLatency = LatencyLog("clip search")
+    var onOpenSettings: (() -> Void)?
     private let io = DispatchQueue(label: "fred.clip.io", qos: .utility)
 
     static let skipTypes: Set<String> = [
@@ -325,10 +326,16 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         return true
     }
 
-    /// ⌘1…⌘9 paste a visible row; ⌘↩ copy without pasting; ⌘⌫ delete the clip.
+    /// ⌘1…⌘9 paste a visible row; ⌘↩ copy without pasting; ⌘⌫ delete the clip;
+    /// ⌘, opens Fred Settings.
     private func handleKeyEquivalent(_ e: NSEvent) -> Bool {
         let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard mods.contains(.command) else { return false }
+        if e.charactersIgnoringModifiers == "," {
+            hide()
+            onOpenSettings?()
+            return true
+        }
         if let ch = e.charactersIgnoringModifiers, let d = Int(ch), d >= 1, d <= 9 {
             let i = offset + d - 1
             if i < results.count { paste(i, andPaste: true) }
