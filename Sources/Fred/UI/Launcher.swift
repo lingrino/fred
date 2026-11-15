@@ -206,6 +206,13 @@ final class Launcher: NSObject, NSTextFieldDelegate {
 
     // MARK: Contact card
 
+    /// Development hook: opens the first contact row's card (no side effects).
+    func openFirstContact() -> Bool {
+        let cat = engine.searcher.catalog
+        for r in refs { if case .item(let i) = r, cat.kinds[i] == .contact { showContact(id: cat.payloads[i], name: cat.titles[i]); return true } }
+        return false
+    }
+
     private func showContact(id: String, name: String) {
         guard let card = ContactCard.load(identifier: id, name: name) else { return }
         mode = .contact(card)

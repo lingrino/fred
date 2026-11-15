@@ -18,6 +18,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let launcherKey = (code: kVK_Space, mods: optionKey)
     static let clipboardKey = (code: kVK_ANSI_C, mods: optionKey | shiftKey)
 
+    /// Picks up a grant given while Fred is running (no OS notification exists for
+    /// that): when a source is still empty and its permission now checks out, reindex.
+    private func retryMissingSources() {
+        var have = [Int](repeating: 0, count: 5)
+        for k in engine.catalog.kinds { have[Int(k.rawValue)] += 1 }
+        if have[Int(Catalog.Kind.bookmark.rawValue)] == 0, Permissions.status(.chromeData) == true {
+            indexer.schedule(.bookmarks, delay: 0)
+        }
+        if have[Int(Catalog.Kind.contact.rawValue)] == 0, Permissions.status(.contacts) == true {
+            indexer.schedule(.contacts, delay: 0)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let t0 = nowNanos()
         engine = Engine()
@@ -26,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeys.register(keyCode: Self.launcherKey.code, modifiers: Self.launcherKey.mods) { [weak self] t in
             self?.clipboard?.hide()
             self?.launcher.toggle(eventTime: t)
+            self?.retryMissingSources()
         }
 
         clipboard = ClipboardController(engine: engine)
@@ -52,6 +66,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         control = ControlServer(app: self)
         control?.start()
+
+        LoginItem.ensureRegistered()
 
         Permissions.requestMissing()
         Log.info("launched in \((nowNanos() - t0) / 1000) µs\n\(Permissions.report())")

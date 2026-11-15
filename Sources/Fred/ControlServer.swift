@@ -74,6 +74,7 @@ final class ControlServer: @unchecked Sendable {
             \(l.showLatency.summary)
             \(app.clipboard?.statsLine ?? "clipboard: off")
             memory: \(residentMB()) MB resident
+            login item: \(LoginItem.statusLine)
             """
         case "permissions": return Permissions.report()
         case "request": Permissions.requestMissing(); return Permissions.report()
@@ -125,6 +126,16 @@ final class ControlServer: @unchecked Sendable {
             l.queryChanged()
             let r = Snapshot.write(view: l.panel.glass, to: out)
             if !wasVisible { l.panel.orderOut(nil); l.panel.alphaValue = 1 }
+            return r
+        case "card":
+            // card <png> <query>: show the first contact result's card offscreen.
+            let bits = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            guard bits.count == 2 else { return "usage: card <png> <query>" }
+            l.panel.alphaValue = 0; l.panel.position(height: l.panel.frame.height); l.panel.orderFrontRegardless()
+            l.field.stringValue = bits[1]
+            l.queryChanged()
+            let r = l.openFirstContact() ? Snapshot.write(view: l.panel.glass, to: bits[0]) : "no contact result"
+            l.panel.orderOut(nil); l.panel.alphaValue = 1
             return r
         case "learn": return e.learning.debugDescription(catalog: e.catalog)
         case "reindex": app.indexer.reloadAll(); return "ok"

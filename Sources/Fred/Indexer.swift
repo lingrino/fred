@@ -26,10 +26,11 @@ final class Indexer: @unchecked Sendable {
     private var appList: [AppScanner.App] = []
     private var paneList: [SettingsScanner.Pane] = []
 
-    enum Source { case apps, bookmarks, contacts, all }
+    enum Source: Hashable { case apps, bookmarks, contacts, all }
+    private var pendingSources: Set<Source> = []
 
     func start() {
-        queue.async { self.reload(.all) }
+        queue.async { self.reload([.all]) }
         watchFiles()
         NotificationCenter.default.addObserver(forName: .CNContactStoreDidChange, object: nil, queue: nil) { [weak self] _ in
             self?.schedule(.contacts)
@@ -39,11 +40,17 @@ final class Indexer: @unchecked Sendable {
         }
     }
 
-    /// Debounced reload (FSEvents and Contacts fire in bursts).
+    /// Debounced reload (FSEvents and Contacts fire in bursts). Requests that arrive
+    /// while one is pending are merged.
     func schedule(_ s: Source, delay: Double = 0.5) {
         queue.async {
+            self.pendingSources.insert(s)
             self.pending?.cancel()
-            let work = DispatchWorkItem { self.reload(s) }
+            let work = DispatchWorkItem {
+                let set = self.pendingSources
+                self.pendingSources = []
+                self.reload(set)
+            }
             self.pending = work
             self.queue.asyncAfter(deadline: .now() + delay, execute: work)
         }
@@ -52,22 +59,22 @@ final class Indexer: @unchecked Sendable {
     /// Re-reads everything; also used when a permission is granted while running.
     func reloadAll() { schedule(.all, delay: 0) }
 
-    private func reload(_ s: Source) {
+    private func reload(_ set: Set<Source>) {
         let t0 = DispatchTime.now().uptimeNanoseconds
-        if s == .all || s == .apps {
+        let all = set.contains(.all)
+        if all || set.contains(.apps) {
             appList = AppScanner.scan()
             apps = AppScanner.items(appList)
         }
-        if s == .all {
+        if all {
             paneList = SettingsScanner.scan()
             panes = SettingsScanner.items(paneList)
         }
-        if s == .all || s == .bookmarks { bookmarks = ChromeBookmarks.items(ChromeBookmarks.load()) }
-        if s == .all || s == .contacts { contacts = ContactsSource.load() }
-        let all = apps + panes + Command.items() + bookmarks + contacts
-        let catalog = Catalog(all)
+        if all || set.contains(.bookmarks) { bookmarks = ChromeBookmarks.items(ChromeBookmarks.load()) }
+        if all || set.contains(.contacts) { contacts = ContactsSource.load() }
+        let catalog = Catalog(apps + panes + Command.items() + bookmarks + contacts)
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
-        Log.info("index \(s): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms")
+        Log.info("index \(set): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms")
         let al = appList, pl = paneList
         DispatchQueue.main.async { MainActor.assumeIsolated { self.onCatalog?(catalog, al, pl) } }
     }
