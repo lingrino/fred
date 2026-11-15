@@ -224,13 +224,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
         case .enter: activate(list.selected, modifiers: [])
         case .commandEnter: activate(list.selected, modifiers: .command)
         case .escape:
-            switch mode {
-            case .search, .contact: hide()
-            case .forceQuit:
-                mode = .search
-                field.placeholder = ""
-                queryChanged()
-            }
+            hide()   // Esc always closes, whatever the mode
         case .pageUp, .pageDown, .tab: break
         }
         return true

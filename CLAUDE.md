@@ -12,7 +12,7 @@ preferences UI and there should not be one.
   Inline calculator ("2+2"). Learns from picks (zoxide/Firefox-style). Enter = row 1 /
   selected row, ⌘1…⌘5 = row n, ↑↓/⌃N⌃P move, Esc closes, ⌘↩ reveals an app in Finder.
   Contact → card of phones/emails/addresses: Enter (or ⌘n/click) pastes the value into the
-  front app, ⌘C copies it and closes, ⌘O opens Contacts.app, Esc closes.
+  front app, ⌘C copies it and closes, ⌘O opens Contacts.app. Esc always closes Fred.
   "Force Quit…" → running-app list.
 - **Clipboard history** (⌘⇧C): text, images, file lists; 90 days; token-AND substring
   search; Enter pastes into the frontmost app, ⌘↩ copies only, ⌘⌫ deletes, ⌘1…⌘9.
