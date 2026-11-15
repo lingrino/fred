@@ -24,6 +24,8 @@ public enum Matcher {
     }
 
     public static let maxQuery = 32
+    /// Fine scores are 0…79 so the kind prior (≤ 20, see Ranking) fits under 100.
+    public static let fineMax: Int32 = 79
     static let neg: Int32 = -1 << 20
 
     /// A folded query split into what the tiers need. Built once per keystroke.
@@ -64,8 +66,8 @@ public enum Matcher {
         if q.compact.count > n { return -1 }
         // EXACT / PREFIX
         if m <= n && t[0] == qp[0] && memeq(qp, t, m) {
-            if m == n { return Tier.exact.rawValue + 99 }
-            return Tier.prefix.rawValue + 99 - min(40, Int32(n - m))
+            if m == n { return Tier.exact.rawValue + fineMax }
+            return Tier.prefix.rawValue + fineMax - min(40, Int32(n - m))
         }
         if m == 1 {
             guard allowLoose else { return -1 }
@@ -93,7 +95,7 @@ public enum Matcher {
 
     @inline(__always)
     static func fineWordPrefix(_ firstWord: Int32, _ n: Int, _ matched: Int) -> Int32 {
-        max(0, 99 - 4 * firstWord - min(40, Int32(n - matched)) / 2)
+        max(0, fineMax - 4 * firstWord - min(40, Int32(n - matched)) / 2)
     }
 
     /// Tokens must be prefixes of words, in order (words need not be adjacent).
@@ -144,7 +146,7 @@ public enum Matcher {
         let matchedWords = Int32(used.nonzeroBitCount)
         let skipped = wordsUpToLast - matchedWords
         let uncovered = totalWords - wordsUpToLast
-        return Tier.acronym.rawValue + max(0, 99 - 15 * skipped - 5 * uncovered)
+        return Tier.acronym.rawValue + max(0, fineMax - 15 * skipped - 5 * uncovered)
     }
 
     /// Can c[i...] be matched with c[i] at a word start after `prev`, or (if i > 0) at prev+1?
@@ -177,7 +179,7 @@ public enum Matcher {
         var p = 0
         while p + m <= n {
             if t[p] == c0 && memeq(q, t + p, m) {
-                return Tier.substring.rawValue + max(0, 99 - min(40, Int32(p)) - min(40, Int32(n - m)) / 2)
+                return Tier.substring.rawValue + max(0, fineMax - min(40, Int32(p)) - min(40, Int32(n - m)) / 2)
             }
             p += 1
         }
@@ -195,13 +197,34 @@ public enum Matcher {
     @inline(__always)
     static func fuzzy(_ q: UnsafePointer<UInt8>, _ m: Int, _ t: UnsafePointer<UInt8>, _ n: Int, _ ws: UInt64,
                       _ scratch: UnsafeMutablePointer<Int32>) -> Int32 {
-        guard m >= 3, m <= n else { return -1 }
+        guard m >= 3, m <= n, gapsInTightestWindow(q, m, t, n) <= max(1, m / 3) else { return -1 }
         let s = dp(q, m, t, n, ws, scratch)
         if s <= neg / 2 { return -1 }
-        // Normalize: best possible is every byte on a word start with first doubled.
-        let maxS = fMatch * Int32(m) + fWord * Int32(m + 1)
-        let fine = max(0, min(99, s * 99 / maxS))
+        let perfect = fMatch * Int32(m) + fWord * 2 + fWord * Int32(m - 1)
+        let fine = max(0, min(fineMax, s * fineMax / perfect))
         return Tier.fuzzy.rawValue + fine
+    }
+
+    /// Dense matches only: "chrma" → Chroma yes, "rea" → R(e)m Delt(a) no. Finds the
+    /// earliest end of q as a subsequence, then the latest start for that end (fzf v1
+    /// window), and returns how many unmatched bytes lie inside it.
+    @inline(__always)
+    static func gapsInTightestWindow(_ q: UnsafePointer<UInt8>, _ m: Int, _ t: UnsafePointer<UInt8>, _ n: Int) -> Int {
+        var j = 0, i = 0
+        while i < m {
+            while j < n && t[j] != q[i] { j += 1 }
+            if j == n { return Int.max }
+            i += 1; j += 1
+        }
+        let end = j - 1
+        var k = end
+        i = m - 1
+        while i >= 0 {
+            while t[k] != q[i] { k -= 1 }
+            i -= 1
+            if i >= 0 { k -= 1 }
+        }
+        return (end - k + 1) - m
     }
 
     @inline(__always)

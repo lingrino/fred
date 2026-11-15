@@ -15,6 +15,10 @@ public struct TopK: Sendable {
     public func item(_ i: Int) -> Int { Int(items[i]) }
     public func score(_ i: Int) -> Int32 { scores[i] }
 
+    mutating func dropBelow(_ threshold: Int32) {
+        while count > 0 && scores[count - 1] < threshold { count -= 1 }
+    }
+
     @inline(__always)
     mutating func insert(item: Int32, score: Int32, tie: Int32) {
         if count == k && (score < scores[k - 1] || (score == scores[k - 1] && tie <= ties[k - 1])) { return }
@@ -40,8 +44,11 @@ public struct TopK: Sendable {
 public enum Ranking {
     /// Fine-score prior per kind (never crosses a tier): apps, commands, settings,
     /// contacts, bookmarks.
-    static let kindPrior: InlineArray<8, Int32> = [20, 10, 15, -10, 0, 0, 0, 0]
+    static let kindPrior: InlineArray<8, Int32> = [20, 10, 15, 0, 5, 0, 0, 0]
     //                                     app settings command bookmark contact
+    /// Results scoring more than this below the best are dropped: when "rea" has strong
+    /// prefix hits, scattered fuzzy hits are noise, but they stay when nothing is better.
+    static let relativeCutoff: Int32 = 350
     static let maxLearned: Int32 = 300
     static let latchBonus: Int32 = 5000
 
@@ -51,7 +58,7 @@ public enum Ranking {
         let base = s - s % 100
         var fine = s - base + kindPrior[kind]
         if role == 1 { fine -= 5 }
-        fine = max(0, min(99, fine))
+        fine = max(0, min(99, fine))   // ≤ fineMax(79) + prior(20)
         return base + fine - (role == 2 ? 100 : 0)
     }
 
@@ -153,6 +160,7 @@ public final class Searcher {
                 }
             }
         }
+        top.dropBelow(top.count > 0 ? top.score(0) - Ranking.relativeCutoff : .min)
         return top
     }
 }

@@ -7,12 +7,13 @@ import Carbon.HIToolbox
 /// as the OS can deliver it.
 @MainActor
 enum HotKeys {
-    private static var handlers: [() -> Void] = []
+    private static var handlers: [(Double) -> Void] = []
     private static var installed = false
 
     /// Registers `keyCode` + Carbon `modifiers` (cmdKey, optionKey, shiftKey, controlKey).
+    /// The handler receives the event's timestamp (for hotkey→shown latency).
     @discardableResult
-    static func register(keyCode: Int, modifiers: Int, _ handler: @escaping () -> Void) -> Bool {
+    static func register(keyCode: Int, modifiers: Int, _ handler: @escaping (_ eventTime: Double) -> Void) -> Bool {
         installIfNeeded()
         let id = UInt32(handlers.count)
         handlers.append(handler)
@@ -31,9 +32,10 @@ enum HotKeys {
             var hk = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
+            let t = GetEventTime(event)   // seconds since boot, same clock as systemUptime
             MainActor.assumeIsolated {
                 let i = Int(hk.id)
-                if i < HotKeys.handlers.count { HotKeys.handlers[i]() }
+                if i < HotKeys.handlers.count { HotKeys.handlers[i](t) }
             }
             return noErr
         }, 1, &spec, nil, nil)

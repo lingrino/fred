@@ -11,7 +11,7 @@ SIGN_ID    := Fred Local Signing
 KEYCHAIN   := $(HOME)/Library/Keychains/fred-signing.keychain-db
 KC_PASS    := $(HOME)/Library/Application Support/FredDev/keychain-password
 
-.PHONY: all app install run test bench clean signing debug-app
+.PHONY: all app install run test bench clean signing debug-app dev
 
 all: app
 
@@ -33,6 +33,13 @@ install: app
 	open "$(INSTALLED)"
 
 run: install
+
+# Like install, but with a Dock icon so UI automation can see/grant Fred.
+dev: app
+	-@pkill -x Fred; sleep 0.2
+	rm -rf "$(INSTALLED)"
+	ditto "$(APP)" "$(INSTALLED)"
+	open -a "$(INSTALLED)" --args --regular
 
 test:
 	./scripts/swift.sh test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing

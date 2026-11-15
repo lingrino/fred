@@ -1,0 +1,5 @@
+#!/bin/bash
+# Talk to the running Fred over its control socket. `fredctl help` lists commands.
+#   fredctl stats | fredctl query chr | fredctl type "2+2"
+SOCK="$HOME/Library/Application Support/Fred/control.sock"
+printf '%s\n' "$*" | /usr/bin/nc -U "$SOCK"

@@ -1,65 +1,48 @@
 import AppKit
 import Carbon.HIToolbox
+import FredCore
 
+/// Wires the app together. Startup order is latency-driven: the hotkey and the (empty)
+/// panel exist before any indexing starts, so Fred is usable the instant it launches
+/// and results fill in as sources finish (tens of ms).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var panel: SpikePanel!
+    var engine: Engine!
+    var launcher: Launcher!
+    let indexer = Indexer()
+    var control: ControlServer?
+    var clipboard: ClipboardController?
+    private var activity: NSObjectProtocol?
+
+    /// ⌥Space launcher, ⌥⇧C clipboard.
+    static let launcherKey = (code: kVK_Space, mods: optionKey)
+    static let clipboardKey = (code: kVK_ANSI_C, mods: optionKey | shiftKey)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel = SpikePanel()
-        let ok = HotKeys.register(keyCode: kVK_Space, modifiers: optionKey) { [unowned self] in
-            self.panel.toggle()
+        let t0 = nowNanos()
+        engine = Engine()
+        launcher = Launcher(engine: engine)
+        engine.onAtlas = { [weak self] a in self?.launcher.list.atlas = a }
+
+        HotKeys.register(keyCode: Self.launcherKey.code, modifiers: Self.launcherKey.mods) { [weak self] t in
+            self?.launcher.toggle(eventTime: t)
         }
-        NSLog("fred: hotkey registered=\(ok)")
-    }
-}
 
-/// Temporary spike: proves non-activating key panel + glass + hotkey on this macOS.
-@MainActor
-final class SpikePanel: NSPanel, NSWindowDelegate {
-    let field = NSTextField()
-
-    init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 680, height: 64),
-                   styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
-                   backing: .buffered, defer: false)
-        isFloatingPanel = true
-        level = .floating
-        hidesOnDeactivate = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        backgroundColor = .clear
-        isOpaque = false
-        hasShadow = true
-        animationBehavior = .none
-        delegate = self
-
-        let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: 680, height: 64))
-        glass.cornerRadius = 24
-        let content = NSView(frame: glass.bounds)
-        field.frame = NSRect(x: 20, y: 14, width: 640, height: 36)
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.font = .systemFont(ofSize: 26, weight: .light)
-        field.placeholderString = "Fred"
-        content.addSubview(field)
-        glass.contentView = content
-        contentView = glass
-    }
-
-    override var canBecomeKey: Bool { true }
-
-    func toggle() {
-        if isVisible { orderOut(nil); return }
-        if let screen = NSScreen.main {
-            let f = screen.visibleFrame
-            setFrameOrigin(NSPoint(x: f.midX - frame.width / 2, y: f.maxY - f.height * 0.22 - frame.height))
+        indexer.onCatalog = { [weak self] c, apps, panes in
+            self?.engine.setCatalog(c, apps: apps, panes: panes)
         }
-        makeKeyAndOrderFront(nil)
-        makeFirstResponder(field)
+        indexer.start()
+
+        // Fred must answer a hotkey instantly at any time: opt out of App Nap and
+        // timer coalescing that would otherwise park an idle background app.
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+            reason: "Fred answers global hotkeys")
+
+        control = ControlServer(app: self)
+        control?.start()
+
+        Permissions.requestMissing()
+        Log.info("launched in \((nowNanos() - t0) / 1000) µs\n\(Permissions.report())")
     }
-
-    func windowDidResignKey(_ notification: Notification) { orderOut(nil) }
-
-    override func cancelOperation(_ sender: Any?) { orderOut(nil) }
 }

@@ -53,7 +53,11 @@ public enum Fold {
                 } else {
                     cls = 0
                 }
-                if props.isWhitespace {
+                let gc = props.generalCategory
+                if props.isWhitespace || gc == .dashPunctuation || gc == .spaceSeparator
+                    || gc == .connectorPunctuation || gc == .format {
+                    // Unicode dashes (‑ – —), NBSP, ZWJ etc. behave like ASCII separators.
+                    cls = 0
                     out.append(0x20)
                 } else {
                     let folded = String(Character(scalar)).folding(

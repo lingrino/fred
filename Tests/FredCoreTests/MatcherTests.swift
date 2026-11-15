@@ -40,6 +40,13 @@ func tier(_ query: String, _ text: String) -> Matcher.Tier? {
         #expect(ws == mask)
     }
 
+    @Test func unicodeDashesAreSeparators() {
+        var out: [UInt8] = []
+        Fold.fold("Wi\u{2011}Fi\u{00A0}Settings", into: &out)
+        #expect(String(decoding: out, as: UTF8.self) == "wi fi settings")
+        #expect(tier("wi-fi", "Wi\u{2011}Fi") == .exact)
+    }
+
     @Test func queryCollapsesSpaces() {
         #expect(String(decoding: Fold.query("  Sys   Set "), as: UTF8.self) == "sys set")
     }
@@ -57,7 +64,8 @@ func tier(_ query: String, _ text: String) -> Matcher.Tier? {
         #expect(tier("gch", "Goober Chroma") == .acronym)
         #expect(tier("tal", "iTally") == .wordPrefix)
         #expect(tier("ock", "Clock") == .substring)
-        #expect(tier("sysst", "System Settings") == .fuzzy)
+        #expect(tier("settngs", "System Settings") == .fuzzy)
+        #expect(tier("sysset", "System Settings") == .acronym)   // run "sys" + run "set"
     }
 
     @Test func rejects() {
@@ -67,6 +75,8 @@ func tier(_ query: String, _ text: String) -> Matcher.Tier? {
         #expect(tier("oo", "Goober") == nil)            // 2 chars: no substring tier
         #expect(tier("ober", "Goober Chroma") == .substring)
         #expect(tier("ygc", "System Settings") == nil)   // fuzzy needs first char on a word start
+        #expect(tier("rea", "Rem Delta") == nil)          // fuzzy must be dense
+        #expect(tier("chrma", "Chroma") == .fuzzy)
         #expect(score("c", "Goober Chroma", loose: false) < 0)   // bookmarks: 1 char = prefix only
         #expect(score("c", "Goober Chroma", loose: true) > 0)
     }

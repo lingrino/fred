@@ -1,0 +1,135 @@
+import AppKit
+import Carbon
+import FredCore
+
+/// Side effects: opening things, system commands, copying, pasting.
+@MainActor
+enum Actions {
+    static func openApp(path: String) {
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: cfg) { _, err in
+            if let err { Log.error("open app \(path): \(err)") }
+        }
+    }
+
+    static func open(url: String) {
+        guard let u = URL(string: url) else { return }
+        NSWorkspace.shared.open(u)
+    }
+
+    static func revealInFinder(path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    static func copy(_ s: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(s, forType: .string)
+    }
+
+    // MARK: System commands
+
+    /// Set FRED_DRY_RUN=1 (or `fredctl dryrun on`) to log instead of executing
+    /// destructive commands — used when testing.
+    static var dryRun = ProcessInfo.processInfo.environment["FRED_DRY_RUN"] == "1"
+
+    static func run(_ c: Command) {
+        if dryRun && c != .quitFred && c != .restartFred && c != .forceQuit {
+            Log.info("dry run: \(c.rawValue)")
+            return
+        }
+        switch c {
+        case .sleep: sendToLoginWindow(kAESleep)
+        case .restart: sendToLoginWindow(kAERestart)          // 'rest': no confirmation dialog
+        case .shutDown: sendToLoginWindow(kAEShutDown)        // 'shut': no confirmation dialog
+        case .lock: lockScreen()
+        case .emptyTrash: emptyTrash()
+        case .quitFred: NSApp.terminate(nil)
+        case .restartFred: relaunch()
+        case .forceQuit: break   // handled by the launcher (mode switch)
+        }
+    }
+
+    /// QA1134: Apple events to loginwindow (the "system process").
+    static func sendToLoginWindow(_ id: AEEventID) {
+        var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: UInt32(kSystemProcess))
+        let target = NSAppleEventDescriptor(descriptorType: typeProcessSerialNumber, bytes: &psn,
+                                            length: MemoryLayout<ProcessSerialNumber>.size)
+        let ev = NSAppleEventDescriptor.appleEvent(withEventClass: kCoreEventClass, eventID: id,
+                                                   targetDescriptor: target, returnID: AEReturnID(kAutoGenerateReturnID),
+                                                   transactionID: AETransactionID(kAnyTransactionID))
+        do { try ev.sendEvent(options: [.noReply], timeout: 10) } catch { Log.error("loginwindow event: \(error)") }
+    }
+
+    /// SACLockScreenImmediate from the private login.framework — what the menu bar's
+    /// "Lock Screen" uses. No permission needed.
+    static func lockScreen() {
+        typealias Fn = @convention(c) () -> Int32
+        guard let h = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
+              let sym = dlsym(h, "SACLockScreenImmediate") else { Log.error("lock: symbol missing"); return }
+        _ = unsafeBitCast(sym, to: Fn.self)()
+    }
+
+    /// Asks Finder (Automation permission). Checks emptiness first: emptying an empty
+    /// Trash can hang on recent macOS.
+    static func emptyTrash() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let src = """
+            tell application "Finder"
+                if (count of items in trash) > 0 then empty trash
+            end tell
+            """
+            var err: NSDictionary?
+            NSAppleScript(source: src)?.executeAndReturnError(&err)
+            if let err { Log.error("empty trash: \(err)") }
+        }
+    }
+
+    static func relaunch() {
+        let path = Bundle.main.bundlePath
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 0.4; /usr/bin/open \"\(path)\""]
+        try? p.run()
+        NSApp.terminate(nil)
+    }
+
+    // MARK: Paste
+
+    /// Posts ⌘V to whatever app has keyboard focus. Needs "Device Control and Data
+    /// Access" (Accessibility / PostEvent). Flags are set explicitly so held modifiers
+    /// (e.g. ⌥⇧ from the hotkey) don't leak into the paste.
+    static func postPaste() {
+        guard CGPreflightPostEventAccess() else { Log.error("paste: no PostEvent permission"); return }
+        let src = CGEventSource(stateID: .combinedSessionState)
+        src?.setLocalEventsFilterDuringSuppressionState([.permitLocalMouseEvents, .permitSystemDefinedEvents],
+                                                         state: .eventSuppressionStateSuppressionInterval)
+        let v = CGKeyCode(keyCodeForV())
+        let down = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: true)
+        let up = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: false)
+        down?.flags = .maskCommand
+        up?.flags = .maskCommand
+        down?.post(tap: .cgSessionEventTap)
+        up?.post(tap: .cgSessionEventTap)
+    }
+
+    /// Key code that produces "v" in the current layout (Dvorak etc.), default ANSI V.
+    static func keyCodeForV() -> Int {
+        guard let src = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let ptr = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) else { return kVK_ANSI_V }
+        let data = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
+        return data.withUnsafeBytes { raw -> Int in
+            guard let layout = raw.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return kVK_ANSI_V }
+            for code in 0..<128 {
+                var dead: UInt32 = 0
+                var len = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                let st = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+                                        OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, 4, &len, &chars)
+                if st == noErr && len == 1 && chars[0] == UniChar(UInt8(ascii: "v")) { return code }
+            }
+            return kVK_ANSI_V
+        }
+    }
+}
