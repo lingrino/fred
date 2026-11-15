@@ -69,16 +69,21 @@ Sources/FredCore/          pure logic, no AppKit — unit-tested, benchmarked
   ClipStore.swift          clipboard history SoA + append-only log + images dir + search
   Sources/*.swift          AppScanner, SettingsScanner, Commands, ChromeBookmarks (Foundation only)
 Sources/Fred/              the app
-  AppDelegate.swift        wiring; startup order (hotkey + panel first, indexing async)
-  Engine.swift             catalog/searcher/learning/icon atlas owner (main thread)
-  Indexer.swift            background reindex on FSEvents / Contacts change / wake
+  main.swift               FredApplication (fast key dispatch to QueryField) + entry point
+  AppDelegate.swift        wiring; startup order (indexer first, hotkey + panels, deferred checks)
+  Engine.swift             catalog/searcher/learning/icon atlas/title atlas owner (main thread)
+  Indexer.swift            background reindex (sources in parallel) on FSEvents / Contacts change / wake
   IconAtlas.swift          all icons pre-rendered (parallel) into one bitmap; rows use sub-images
-  UI/Panel.swift           non-activating glass NSPanel + Theme constants
-  UI/ResultList.swift      fixed pool of self-drawn rows (Core Text, no AutoLayout/table)
-  UI/Launcher.swift        launcher controller: keystroke → search → rows, keys, modes, actions
+  TitleAtlas.swift         all catalog titles pre-rendered as A8 masks (rows = mask + color layer)
+  UI/Panel.swift           FloatingPanel: fixed-size non-activating window, backdrop (vibrancy),
+                           present()/park() instead of order in/out; Theme constants; DevMode
+  UI/QueryField.swift      custom single-line text input (fast path + NSTextInputClient for IME)
+  UI/ResultList.swift      ResultList (NSView host) + RowLayer (pure CALayer row)
+  UI/TextImage.swift       one-line Core Text → CGImage for dynamic strings; CALayer.still()
+  UI/Launcher.swift        launcher controller: keystroke → search → rows, keys, modes, actions, latency stats
   ClipboardController.swift pasteboard polling, clipboard panel + preview, paste
   Actions.swift            open, system commands (loginwindow AEs, lock, Finder), ⌘V posting
-  ContactsSource / ContactCard / Permissions / LoginItem / ControlServer / Snapshot
+  ContactsSource / ContactCard / Permissions / LoginItem / ControlServer / Snapshot / Log
 Sources/FredBench/         `fredbench scan` (what sources find) and `fredbench` (benchmarks)
 ```
 
@@ -129,10 +134,17 @@ derivation orphans learned history — don't, or migrate.
 
 ## Control socket (`scripts/fredctl`)
 
-`stats`, `permissions`, `request`, `query <q>`, `snapshot <png> [q]` (offscreen render,
+`stats` (incl. per-stage latency), `resetstats`, `permissions`, `request`, `query <q>`,
+`snapshot <png> [q]` (renders the content layer tree offscreen — no glass/vibrancy — and
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
-(visible UI — **don't use while the user is active**, it takes keyboard focus),
-`learn`, `reindex`, `dryrun on|off`, `clip search|show|snapshot|forget`.
+(visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
+`learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`.
+
+Interactive testing with computer use: `make dev` (Dock icon + Fred activates on show,
+because the automation tool only types into the frontmost app). Check the user is away
+first: `ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print int($NF/1e9)}'` (seconds idle).
+Measure in production mode (`make install`) for hotkey latency; close the panel with
+`fredctl hide` there (the tool can't send keys to a non-frontmost focused panel).
 
 ## Testing etiquette on the user's Mac
 
