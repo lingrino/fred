@@ -14,6 +14,12 @@ final class Engine {
     private var pendingApps: [AppScanner.App] = []
     private var pendingPanes: [SettingsScanner.Pane] = []
     var onAtlas: ((IconAtlas) -> Void)?
+    var onTitles: ((TitleAtlas?) -> Void)?
+    /// Pre-rendered catalog titles; nil while (re)building — rows then rasterize.
+    private(set) var titles: TitleAtlas?
+    static let titleMaxWidth = Theme.width - (Theme.rowInset + 10 + Theme.iconSize + 12) - Theme.rowInset - 14
+    /// Fires once, when the first catalog and its icons are in place.
+    var onReady: (() -> Void)?
 
     nonisolated static let dataDirPath = NSHomeDirectory() + "/Library/Application Support/Fred"
     nonisolated static let dataDir: URL = {
@@ -42,6 +48,22 @@ final class Engine {
 
     func setCatalog(_ c: Catalog, apps: [AppScanner.App], panes: [SettingsScanner.Pane]) {
         searcher.setCatalog(c)
+        titles = nil
+        onTitles?(nil)
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        let names = c.titles
+        DispatchQueue.global(qos: .userInitiated).async {
+            let t0 = nowNanos()
+            let t = TitleAtlas(titles: names, font: Theme.rowFont, maxWidth: Engine.titleMaxWidth, scale: scale)
+            Log.info("title atlas: \(names.count) titles, \(t.map { "\($0.width)x\($0.height)" } ?? "failed") in \((nowNanos() - t0) / 1000) µs")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard self.searcher.catalog === c else { return }   // superseded
+                    self.titles = t
+                    self.onTitles?(t)
+                }
+            }
+        }
         var byID: [String: (path: String, name: String)] = [:]
         for a in apps { if let id = a.bundleID { byID[id] = (a.path, a.name) } }
         appsByID = byID
@@ -60,6 +82,8 @@ final class Engine {
                         self.atlas = a
                         self.mapIcons()
                         self.onAtlas?(a)
+                        self.onReady?()
+                        self.onReady = nil
                     }
                 }
             }

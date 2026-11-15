@@ -48,11 +48,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.launcher.hide()
             self?.clipboard?.toggle()
         }
+        engine.onTitles = { [weak self] t in self?.launcher.list.titles = t }
         engine.onAtlas = { [weak self] a in
             self?.launcher.list.atlas = a
             self?.clipboard?.list.atlas = a
         }
 
+        engine.onReady = { [weak self] in
+            self?.launcher.warmUp()
+            Log.info("ready \((nowNanos() - t0) / 1000) µs after launch")
+        }
         indexer.onCatalog = { [weak self] c, apps, panes in
             self?.engine.setCatalog(c, apps: apps, panes: panes)
         }

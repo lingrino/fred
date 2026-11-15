@@ -10,11 +10,11 @@ import UniformTypeIdentifiers
 /// read only when the count changes and the item isn't marked concealed/transient
 /// (password managers, nspasteboard.org markers).
 @MainActor
-final class ClipboardController: NSObject, NSTextFieldDelegate {
+final class ClipboardController: NSObject, QueryFieldDelegate {
     let store: ClipStore
     let engine: Engine
-    let panel = FloatingPanel(width: ClipTheme.width)
-    let field = SearchField()
+    let panel = FloatingPanel(width: ClipTheme.width, heights: [ClipTheme.height])
+    let field = QueryField(frame: .zero)
     let list = ResultList(capacity: ClipTheme.visibleRows, rowHeight: ClipTheme.rowHeight, width: ClipTheme.listWidth)
     let preview = ClipPreview(frame: .zero)
     private var timer: Timer?
@@ -125,9 +125,8 @@ final class ClipboardController: NSObject, NSTextFieldDelegate {
     // MARK: Panel
 
     private func buildUI() {
-        panel.setContentSize(NSSize(width: ClipTheme.width, height: ClipTheme.height))
-        field.frame = NSRect(x: 22, y: (Theme.fieldHeight - 34) / 2, width: ClipTheme.width - 44, height: 34)
-        field.placeholderString = "Clipboard"
+        field.frame = NSRect(x: 22, y: (Theme.fieldHeight - 40) / 2, width: ClipTheme.width - 44, height: 40)
+        field.placeholder = "Clipboard"
         field.delegate = self
         panel.content.addSubview(field)
         list.frame.origin = NSPoint(x: 0, y: Theme.fieldHeight)
@@ -151,20 +150,21 @@ final class ClipboardController: NSObject, NSTextFieldDelegate {
     func toggle() { panel.isVisible ? hide() : show() }
 
     func show() {
-        field.stringValue = ""
+        field.text = ""
         refresh()
         panel.position(height: ClipTheme.height)
+        if DevMode.regular { NSApp.activate() }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
     }
 
     func hide() { if panel.isVisible { panel.orderOut(nil) } }
 
-    func controlTextDidChange(_ obj: Notification) { refresh() }
+    func queryFieldDidChange(_ f: QueryField) { refresh() }
 
     private func refresh() {
         let t0 = nowNanos()
-        results = store.search(field.stringValue, limit: 500)
+        results = store.search(field.text, limit: 500)
         selected = 0
         offset = 0
         render()
@@ -219,18 +219,18 @@ final class ClipboardController: NSObject, NSTextFieldDelegate {
         render()
     }
 
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-        switch sel {
-        case #selector(NSResponder.moveDown(_:)): move(1); return true
-        case #selector(NSResponder.moveUp(_:)): move(-1); return true
-        case #selector(NSResponder.pageDown(_:)), #selector(NSResponder.scrollPageDown(_:)): move(ClipTheme.visibleRows); return true
-        case #selector(NSResponder.pageUp(_:)), #selector(NSResponder.scrollPageUp(_:)): move(-ClipTheme.visibleRows); return true
-        case #selector(NSResponder.insertNewline(_:)):
-            paste(selected, andPaste: !NSEvent.modifierFlags.contains(.command))
-            return true
-        case #selector(NSResponder.cancelOperation(_:)): hide(); return true
-        default: return false
+    func queryField(_ f: QueryField, command: QueryField.Command) -> Bool {
+        switch command {
+        case .down: move(1)
+        case .up: move(-1)
+        case .pageDown: move(ClipTheme.visibleRows)
+        case .pageUp: move(-ClipTheme.visibleRows)
+        case .enter: paste(selected, andPaste: true)
+        case .commandEnter: paste(selected, andPaste: false)
+        case .escape: hide()
+        case .tab: break
         }
+        return true
     }
 
     /// ⌘1…⌘9 paste a visible row; ⌘↩ copy without pasting; ⌘⌫ delete the clip.
@@ -243,12 +243,11 @@ final class ClipboardController: NSObject, NSTextFieldDelegate {
             return true
         }
         switch e.keyCode {
-        case 36, 76: paste(selected, andPaste: false); return true
         case 51:
             guard selected < results.count else { return true }
             store.delete(results[selected])
             let keep = selected
-            results = store.search(field.stringValue, limit: 500)
+            results = store.search(field.text, limit: 500)
             selected = min(keep, max(0, results.count - 1))
             offset = min(offset, selected)
             render()
@@ -312,9 +311,9 @@ final class ClipboardController: NSObject, NSTextFieldDelegate {
             let bits = parts[1].split(separator: " ", maxSplits: 1).map(String.init)
             let was = panel.isVisible
             if !was { panel.alphaValue = 0; panel.position(height: ClipTheme.height); panel.orderFrontRegardless() }
-            field.stringValue = bits.count > 1 ? bits[1] : ""
+            field.text = bits.count > 1 ? bits[1] : ""
             refresh()
-            let r = Snapshot.write(view: panel.glass, to: bits[0])
+            let r = Snapshot.write(view: panel.content, to: bits[0])
             if !was { panel.orderOut(nil); panel.alphaValue = 1 }
             return r
         default: return "clip: search <q> | show | snapshot <png> [q]"

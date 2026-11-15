@@ -36,7 +36,11 @@ enum ContactsSource {
             if !given.isEmpty && !family.isEmpty { aliases.append(family + " " + given) }
             var secondary: [String] = []
             if !org.isEmpty && org != title { secondary.append(org) }
-            for e in c.emailAddresses { secondary.append(e.value as String) }
+            // Local part only: domains ("gmail com") would match half the address book.
+            for e in c.emailAddresses {
+                let addr = e.value as String
+                if let at = addr.firstIndex(of: "@") { secondary.append(String(addr[..<at])) } else { secondary.append(addr) }
+            }
             items.append(Catalog.Item(kind: .contact, title: title, aliases: aliases, secondary: secondary,
                                       payload: c.identifier))
         }

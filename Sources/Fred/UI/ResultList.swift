@@ -13,6 +13,9 @@ final class ResultList: FlippedView {
         var title: String
         var detail: String? = nil      // right-aligned secondary text (e.g. contact field label)
         var icon: Icon
+        /// Catalog item whose pre-rendered title (TitleAtlas) can be used instead of
+        /// rasterizing `title` now.
+        var titleItem: Int? = nil
     }
 
     enum Icon: Equatable {
@@ -31,10 +34,11 @@ final class ResultList: FlippedView {
 
     let capacity: Int
     let rowHeight: CGFloat
-    private var rowViews: [RowView] = []
+    private var rowViews: [RowLayer] = []
     private(set) var rows: [Row] = []
     private(set) var selected = 0
     var atlas: IconAtlas? { didSet { for r in rowViews { r.atlas = atlas } } }
+    var titles: TitleAtlas? { didSet { for r in rowViews { r.titles = titles } } }
     var onClick: ((Int) -> Void)?
 
     init(capacity: Int, rowHeight: CGFloat = Theme.rowHeight, width: CGFloat) {
@@ -42,12 +46,26 @@ final class ResultList: FlippedView {
         self.rowHeight = rowHeight
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: CGFloat(capacity) * rowHeight))
         wantsLayer = true
+        layerContentsRedrawPolicy = .never
         for i in 0..<capacity {
-            let v = RowView(frame: NSRect(x: 0, y: CGFloat(i) * rowHeight, width: width, height: rowHeight))
-            v.isHidden = true
-            addSubview(v)
+            let v = RowLayer(frame: CGRect(x: 0, y: CGFloat(i) * rowHeight, width: width, height: rowHeight), host: self)
+            v.root.isHidden = true
+            layer!.addSublayer(v.root)
             rowViews.append(v)
         }
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {}
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        for r in rowViews { r.appearanceChanged() }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        for r in rowViews { r.appearanceChanged() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -55,20 +73,17 @@ final class ResultList: FlippedView {
     var height: CGFloat { CGFloat(rows.count) * rowHeight }
 
     func set(_ new: [Row], selected sel: Int) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         rows = new
         selected = new.isEmpty ? 0 : max(0, min(sel, new.count - 1))
         for i in 0..<capacity {
             let v = rowViews[i]
             if i < new.count {
                 v.update(new[i], selected: i == selected)
-                if v.isHidden { v.isHidden = false }
-            } else if !v.isHidden {
-                v.isHidden = true
+                if v.root.isHidden { v.root.isHidden = false }
+            } else if !v.root.isHidden {
+                v.root.isHidden = true
             }
         }
-        CATransaction.commit()
     }
 
     func select(_ i: Int) {
@@ -99,111 +114,115 @@ final class ResultList: FlippedView {
     }
 }
 
-/// One result row, fully self-drawn.
+/// One result row as a layer tree (no NSView: toggling/updating rows never enters
+/// AppKit's view machinery): selection pill (GPU), icon (atlas sub-image, GPU), title
+/// (pre-rendered mask from TitleAtlas, or a small CGImage rendered on the spot) and
+/// optional right-aligned detail text.
 @MainActor
-final class RowView: FlippedView {
+final class RowLayer {
+    let root = CALayer.still()
+    private unowned let host: NSView
     private var row: ResultList.Row?
     private var isSelected = false
-    private var titleLine: CTLine?
-    private var detailLine: CTLine?
-    private var icon: CGImage?
-    var atlas: IconAtlas? { didSet { resolveIcon(); needsDisplay = true } }
+    private let pill = CALayer.still()
+    private let iconLayer = CALayer.still()
+    private let titleLayer = CALayer.still()
+    private let detailLayer = CALayer.still()
+    private let titleMask = CALayer.still()
+    var atlas: IconAtlas? { didSet { applyIcon() } }
+    var titles: TitleAtlas? { didSet { renderText() } }
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    init(frame: CGRect, host: NSView) {
+        self.host = host
+        root.frame = frame
+        pill.cornerRadius = 12
+        pill.isHidden = true
+        pill.frame = CGRect(x: Theme.rowInset, y: 0, width: frame.width - 2 * Theme.rowInset, height: frame.height)
+        iconLayer.frame = CGRect(x: Theme.rowInset + 10, y: ((frame.height - Theme.iconSize) / 2).rounded(),
+                                 width: Theme.iconSize, height: Theme.iconSize)
+        iconLayer.contentsGravity = .resizeAspect
+        iconLayer.minificationFilter = .trilinear
+        titleMask.contentsGravity = .resize
+        for l in [pill, iconLayer, titleLayer, detailLayer] { root.addSublayer(l) }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    private var bounds: CGRect { root.bounds }
+    private var effectiveAppearance: NSAppearance { host.effectiveAppearance }
 
-    override var wantsUpdateLayer: Bool { false }
+    func appearanceChanged() {
+        applyPillColor()
+        renderText()
+    }
 
     func update(_ r: ResultList.Row, selected: Bool) {
         guard r != row || selected != isSelected else { return }
         let iconChanged = r.icon != row?.icon
+        let textChanged = r.title != row?.title || r.detail != row?.detail || r.titleItem != row?.titleItem
+            || selected != isSelected
         row = r
         isSelected = selected
-        rebuildLines()
-        if iconChanged { resolveIcon() }
-        needsDisplay = true
+        pill.isHidden = !selected
+        if selected { applyPillColor() }
+        if iconChanged { applyIcon() }
+        if textChanged { renderText() }
     }
 
     func setSelected(_ s: Bool) {
         guard s != isSelected else { return }
         isSelected = s
-        rebuildLines()
-        needsDisplay = true
+        pill.isHidden = !s
+        if s { applyPillColor() }
+        renderText()
     }
 
-    private func resolveIcon() {
-        switch row?.icon {
-        case .atlas(let slot)?: icon = atlas?.image(slot)
-        case .image(let img)?: icon = img
-        default: icon = nil
+    private func applyPillColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            pill.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.9).cgColor
         }
     }
 
-    private var textColor: NSColor { isSelected ? .alternateSelectedControlTextColor : .labelColor }
+    private func applyIcon() {
+        switch row?.icon {
+        case .atlas(let slot)?: iconLayer.contents = atlas?.image(slot)
+        case .image(let img)?: iconLayer.contents = img
+        default: iconLayer.contents = nil
+        }
+    }
 
-    private func rebuildLines() {
-        guard let row else { titleLine = nil; detailLine = nil; return }
-        titleLine = CTLineCreateWithAttributedString(NSAttributedString(string: row.title, attributes: [
-            .font: Theme.rowFont, .foregroundColor: textColor,
-        ]))
+    private func renderText() {
+        guard let row, let scale = host.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor else { return }
+        let ap = effectiveAppearance
+        let textX = Theme.rowInset + 10 + Theme.iconSize + 12
+        var maxTitle = bounds.width - textX - Theme.rowInset - 14
         if let d = row.detail {
             let dc: NSColor = isSelected ? .alternateSelectedControlTextColor.withAlphaComponent(0.8) : .secondaryLabelColor
-            detailLine = CTLineCreateWithAttributedString(NSAttributedString(string: d, attributes: [
-                .font: Theme.detailFont, .foregroundColor: dc,
-            ]))
+            let r = TextImage.render(d, font: Theme.detailFont, color: dc, scale: scale, appearance: ap)
+            detailLayer.contents = r.image
+            detailLayer.contentsScale = scale
+            detailLayer.frame = CGRect(x: bounds.width - Theme.rowInset - 14 - r.size.width,
+                                       y: ((bounds.height - r.size.height) / 2).rounded(), width: r.size.width, height: r.size.height)
+            maxTitle -= r.size.width + 16
         } else {
-            detailLine = nil
+            detailLayer.contents = nil
         }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        if isSelected {
-            let pill = NSRect(x: Theme.rowInset, y: 0, width: bounds.width - 2 * Theme.rowInset, height: bounds.height)
-            NSColor.controlAccentColor.withAlphaComponent(0.9).setFill()
-            NSBezierPath(roundedRect: pill, xRadius: 12, yRadius: 12).fill()
+        let tc: NSColor = isSelected ? .alternateSelectedControlTextColor : .labelColor
+        if let item = row.titleItem, row.detail == nil, let t = titles, item < t.count, t.scale == scale {
+            // Pre-rendered mask: color is just the layer's background.
+            let size = t.size(item)
+            ap.performAsCurrentDrawingAppearance { titleLayer.backgroundColor = tc.cgColor }
+            titleLayer.contents = nil
+            titleLayer.frame = CGRect(x: textX, y: ((bounds.height - size.height) / 2).rounded(), width: size.width, height: size.height)
+            if titleMask.contents as! CGImage? !== t.image { titleMask.contents = t.image }
+            titleMask.contentsRect = t.contentsRect(item)
+            titleMask.frame = CGRect(origin: .zero, size: size)
+            if titleLayer.mask !== titleMask { titleLayer.mask = titleMask }
+            return
         }
-        let iconX = Theme.rowInset + 10
-        if let icon {
-            let r = CGRect(x: iconX, y: (bounds.height - Theme.iconSize) / 2, width: Theme.iconSize, height: Theme.iconSize)
-            ctx.saveGState()
-            ctx.interpolationQuality = .high
-            // Flipped view: draw the image upright.
-            ctx.translateBy(x: 0, y: r.maxY + r.minY)
-            ctx.scaleBy(x: 1, y: -1)
-            ctx.draw(icon, in: r)
-            ctx.restoreGState()
-        }
-        let textX = iconX + Theme.iconSize + 12
-        var maxTitle = bounds.width - textX - Theme.rowInset - 14
-        if let d = detailLine {
-            let w = CTLineGetTypographicBounds(d, nil, nil, nil)
-            maxTitle -= w + 16
-            drawLine(d, ctx: ctx, x: bounds.width - Theme.rowInset - 14 - w, font: Theme.detailFont)
-        }
-        if var t = titleLine {
-            if CTLineGetTypographicBounds(t, nil, nil, nil) > maxTitle {
-                let ell = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: [
-                    .font: Theme.rowFont, .foregroundColor: textColor]))
-                if let tr = CTLineCreateTruncatedLine(t, maxTitle, .end, ell) { t = tr }
-            }
-            drawLine(t, ctx: ctx, x: textX, font: Theme.rowFont)
-        }
-    }
-
-    private func drawLine(_ line: CTLine, ctx: CGContext, x: CGFloat, font: NSFont) {
-        ctx.saveGState()
-        ctx.textMatrix = .identity
-        ctx.translateBy(x: 0, y: bounds.height)
-        ctx.scaleBy(x: 1, y: -1)
-        let baseline = ((bounds.height - (font.ascender - font.descender)) / 2 - font.descender).rounded()
-        ctx.textPosition = CGPoint(x: x, y: baseline)
-        CTLineDraw(line, ctx)
-        ctx.restoreGState()
+        titleLayer.mask = nil
+        titleLayer.backgroundColor = nil
+        let r = TextImage.render(row.title, font: Theme.rowFont, color: tc, maxWidth: maxTitle, scale: scale, appearance: ap)
+        titleLayer.contents = r.image
+        titleLayer.contentsScale = scale
+        titleLayer.frame = CGRect(x: textX, y: ((bounds.height - r.size.height) / 2).rounded(), width: r.size.width, height: r.size.height)
     }
 }

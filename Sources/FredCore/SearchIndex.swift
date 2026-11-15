@@ -6,6 +6,7 @@
 ///     masks  [UInt64] × n   char-presence mask — the only array touched for every entry
 ///     spans  [UInt32] × n   (start << 8) | len  into `bytes` (len ≤ 255, start < 16 MiB)
 ///     starts [UInt64] × n   word-start bitmask over the first 64 folded bytes
+///     initials [UInt64] × n char mask of the bytes AT word starts (first-char prefilter)
 ///     items  [UInt32] × n   item index (low 24 bits) | kind << 24 | role << 28
 ///     bytes  [UInt8]        folded text of all entries, back to back, + 16 bytes padding
 ///
@@ -17,6 +18,7 @@ public final class SearchIndex: @unchecked Sendable {
     @usableFromInline let masks: UnsafePointer<UInt64>
     @usableFromInline let spans: UnsafePointer<UInt32>
     @usableFromInline let starts: UnsafePointer<UInt64>
+    @usableFromInline let initials: UnsafePointer<UInt64>
     @usableFromInline let items: UnsafePointer<UInt32>
     @usableFromInline let bytes: UnsafePointer<UInt8>
     private let block: UnsafeMutableRawPointer
@@ -55,6 +57,7 @@ public final class SearchIndex: @unchecked Sendable {
         var spans: [UInt32] = []; spans.reserveCapacity(entries.count)
         var starts: [UInt64] = []; starts.reserveCapacity(entries.count)
         var masks: [UInt64] = []; masks.reserveCapacity(entries.count)
+        var initials: [UInt64] = []; initials.reserveCapacity(entries.count)
         var items: [UInt32] = []; items.reserveCapacity(entries.count)
         var tmp: [UInt8] = []
         for e in entries {
@@ -68,8 +71,12 @@ public final class SearchIndex: @unchecked Sendable {
             precondition(start < 1 << 24, "search arena exceeds 16 MiB")
             arena.append(contentsOf: tmp[0..<len])
             spans.append(UInt32(start) << 8 | UInt32(len))
-            starts.append(len >= 64 ? ws : ws & ((1 << UInt64(len)) &- 1))
+            let w = len >= 64 ? ws : ws & ((1 << UInt64(len)) &- 1)
+            starts.append(w)
             masks.append(Fold.charMask(tmp[0..<len]))
+            var ini: UInt64 = 0, bits = w
+            while bits != 0 { ini |= Fold.charBit(tmp[bits.trailingZeroBitCount]); bits &= bits &- 1 }
+            initials.append(ini)
             items.append(Self.pack(item: e.item, kind: e.kind, role: e.role))
         }
         let n = spans.count
@@ -80,7 +87,8 @@ public final class SearchIndex: @unchecked Sendable {
         let oMasks = 0
         let oSpans = up(oMasks + n * 8)
         let oStarts = up(oSpans + n * 4)
-        let oItems = up(oStarts + n * 8)
+        let oInitials = up(oStarts + n * 8)
+        let oItems = up(oInitials + n * 8)
         let oBytes = up(oItems + n * 4)
         let total = up(oBytes + arena.count + 16)
         block = UnsafeMutableRawPointer.allocate(byteCount: max(total, Self.line), alignment: Self.line)
@@ -89,14 +97,17 @@ public final class SearchIndex: @unchecked Sendable {
         let m = (block + oMasks).bindMemory(to: UInt64.self, capacity: n)
         let s = (block + oSpans).bindMemory(to: UInt32.self, capacity: n)
         let w = (block + oStarts).bindMemory(to: UInt64.self, capacity: n)
+        let ini = (block + oInitials).bindMemory(to: UInt64.self, capacity: n)
         let it = (block + oItems).bindMemory(to: UInt32.self, capacity: n)
         let b = (block + oBytes).bindMemory(to: UInt8.self, capacity: arena.count + 16)
         masks.withUnsafeBufferPointer { m.update(from: $0.baseAddress!, count: n) }
         spans.withUnsafeBufferPointer { s.update(from: $0.baseAddress!, count: n) }
         starts.withUnsafeBufferPointer { w.update(from: $0.baseAddress!, count: n) }
+        initials.withUnsafeBufferPointer { ini.update(from: $0.baseAddress!, count: n) }
         items.withUnsafeBufferPointer { it.update(from: $0.baseAddress!, count: n) }
         arena.withUnsafeBufferPointer { b.update(from: $0.baseAddress!, count: arena.count) }
         self.masks = UnsafePointer(m); self.spans = UnsafePointer(s); self.starts = UnsafePointer(w)
+        self.initials = UnsafePointer(ini)
         self.items = UnsafePointer(it); self.bytes = UnsafePointer(b)
     }
 

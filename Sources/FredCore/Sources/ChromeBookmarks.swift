@@ -64,11 +64,19 @@ public enum ChromeBookmarks {
         return out
     }
 
-    /// Host without "www.", used as a secondary search field ("github.com").
+    /// Host as a secondary search field, minus "www." and the TLD: "docs.google.com" →
+    /// "docs.google". TLDs have no search value and would make "co" match every .com.
     public static func host(_ url: String) -> String? {
         guard var h = URL(string: url)?.host else { return nil }
         if h.hasPrefix("www.") { h.removeFirst(4) }
-        return h
+        if let dot = h.lastIndex(of: "."), h[h.index(after: dot)...].allSatisfy(\.isLetter) {
+            h = String(h[..<dot])
+            // Two-part public suffixes like co.uk / com.au.
+            if let d2 = h.lastIndex(of: "."), ["co", "com", "org", "net", "ac", "gov"].contains(String(h[h.index(after: d2)...])) {
+                h = String(h[..<d2])
+            }
+        }
+        return h.isEmpty ? nil : h
     }
 
     public static func items(_ bookmarks: [Bookmark]) -> [Catalog.Item] {

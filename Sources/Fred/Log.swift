@@ -5,7 +5,7 @@ import os
 ///   /usr/bin/log stream --predicate 'subsystem == "dev.fred.Fred"' --level info
 enum Log {
     static let logger = Logger(subsystem: "dev.fred.Fred", category: "fred")
-    static func info(_ s: String) { logger.info("\(s, privacy: .public)") }
+    static func info(_ s: String) { logger.notice("\(s, privacy: .public)") }
     static func error(_ s: String) { logger.error("\(s, privacy: .public)") }
 }
 
@@ -24,6 +24,8 @@ final class LatencyLog {
         self.name = name
         samples = Array(repeating: 0, count: capacity)
     }
+
+    func reset() { next = 0; filled = false }
 
     func add(_ ns: UInt64) {
         samples[next] = ns

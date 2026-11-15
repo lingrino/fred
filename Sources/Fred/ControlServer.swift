@@ -70,7 +70,21 @@ final class ControlServer: @unchecked Sendable {
             return """
             catalog: \(c.count) items (apps \(kinds[0]), settings \(kinds[1]), commands \(kinds[2]), bookmarks \(kinds[3]), contacts \(kinds[4])), \(c.index.count) entries, \(c.index.byteCount) text bytes
             atlas: \(e.atlas.map { "\($0.slots) icons" } ?? "not ready")
+            \(l.searchLatency.summary)
             \(l.keystrokeLatency.summary)
+            \(l.stOS.summary)
+            \(l.stDeliver.summary)
+            \(l.stAppKit.summary)
+            \(l.stDispatch.summary)
+            \(QueryField.replaceCost.summary)
+            \(QueryField.relayoutCost.summary)
+            \(QueryField.renderCost.summary)
+            \(QueryField.blinkCost.summary)
+            \(l.stRowsRender.summary)
+            \(l.stDisplay.summary)
+            \(l.stFlush.summary)
+            \(l.stResize.summary)
+            \(l.stDraw.summary)
             \(l.showLatency.summary)
             \(app.clipboard?.statsLine ?? "clipboard: off")
             memory: \(residentMB()) MB resident
@@ -93,20 +107,19 @@ final class ControlServer: @unchecked Sendable {
         case "hide": l.hide(); return "ok"
         case "type":
             if !l.isVisible { l.show() }
-            l.field.stringValue = arg
-            l.field.currentEditor()?.selectedRange = NSRange(location: arg.utf16.count, length: 0)
+            l.field.text = arg
             l.queryChanged()
             return "ok"
         case "key":
             // Simulate navigation keys in the launcher: down, up, esc.
-            let sel: Selector? = switch arg {
-            case "down": #selector(NSResponder.moveDown(_:))
-            case "up": #selector(NSResponder.moveUp(_:))
-            case "esc": #selector(NSResponder.cancelOperation(_:))
+            let c: QueryField.Command? = switch arg {
+            case "down": .down
+            case "up": .up
+            case "esc": .escape
             default: nil
             }
-            guard let sel, let tv = l.field.currentEditor() as? NSTextView else { return "?" }
-            _ = l.control(l.field, textView: tv, doCommandBy: sel)
+            guard let c else { return "?" }
+            _ = l.queryField(l.field, command: c)
             return "ok"
         case "snapshot":
             // snapshot <png path> [query] — renders the launcher offscreen (no focus
@@ -119,26 +132,31 @@ final class ControlServer: @unchecked Sendable {
                 // Ordered in invisibly and without becoming key: layers get drawn, the
                 // user's focus is untouched.
                 l.panel.alphaValue = 0
-                l.panel.position(height: l.panel.frame.height)
+                l.panel.position(height: l.panel.glassHeight)
                 l.panel.orderFrontRegardless()
             }
-            l.field.stringValue = bits.count > 1 ? bits[1] : ""
+            l.field.text = bits.count > 1 ? bits[1] : ""
             l.queryChanged()
-            let r = Snapshot.write(view: l.panel.glass, to: out)
+            let r = Snapshot.write(view: l.panel.content, to: out)
             if !wasVisible { l.panel.orderOut(nil); l.panel.alphaValue = 1 }
             return r
         case "card":
             // card <png> <query>: show the first contact result's card offscreen.
             let bits = arg.split(separator: " ", maxSplits: 1).map(String.init)
             guard bits.count == 2 else { return "usage: card <png> <query>" }
-            l.panel.alphaValue = 0; l.panel.position(height: l.panel.frame.height); l.panel.orderFrontRegardless()
-            l.field.stringValue = bits[1]
+            l.panel.alphaValue = 0; l.panel.position(height: l.panel.glassHeight); l.panel.orderFrontRegardless()
+            l.field.text = bits[1]
             l.queryChanged()
-            let r = l.openFirstContact() ? Snapshot.write(view: l.panel.glass, to: bits[0]) : "no contact result"
+            let r = l.openFirstContact() ? Snapshot.write(view: l.panel.content, to: bits[0]) : "no contact result"
             l.panel.orderOut(nil); l.panel.alphaValue = 1
             return r
         case "learn": return e.learning.debugDescription(catalog: e.catalog)
         case "reindex": app.indexer.reloadAll(); return "ok"
+        case "resetstats":
+            for x in [l.searchLatency, l.keystrokeLatency, l.stOS, l.stDeliver, l.stAppKit, l.stDispatch, l.stRowsRender, l.stResize, l.stDraw, l.stDisplay, l.stFlush, l.showLatency, QueryField.renderCost, QueryField.relayoutCost, QueryField.blinkCost, QueryField.replaceCost] { x.reset() }
+            return "ok"
+        case "shadow":
+            l.panel.hasShadow = arg != "off"; return "shadow \(l.panel.hasShadow)"
         case "dryrun": Actions.dryRun = arg != "off"; return "dryrun \(Actions.dryRun)"
         case "clip": return app.clipboard?.control(arg) ?? "clipboard: off"
         default:

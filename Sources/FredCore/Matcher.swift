@@ -59,11 +59,19 @@ public enum Matcher {
     @inline(__always)
     /// `scratch` must hold `scratchCount` Int32s; it is the DP's working memory, owned by
     /// the caller so the hot path never allocates.
+    /// `lowest` is the weakest tier still worth computing (the caller's branch-and-bound:
+    /// weaker tiers can't make the top K). `initialHit` says whether some word in the
+    /// entry starts with the query's first byte — required by every tier but SUBSTRING.
     public static func score(_ q: Query, _ qp: UnsafePointer<UInt8>, _ cp: UnsafePointer<UInt8>,
                              _ t: UnsafePointer<UInt8>, _ n: Int, _ ws: UInt64, allowLoose: Bool,
-                             _ scratch: UnsafeMutablePointer<Int32>) -> Int32 {
+                             _ scratch: UnsafeMutablePointer<Int32>,
+                             lowest: Tier = .fuzzy, initialHit: Bool = true) -> Int32 {
         let m = q.count
         if q.compact.count > n { return -1 }
+        if !initialHit {
+            guard m >= 3, lowest.rawValue <= Tier.substring.rawValue else { return -1 }
+            return substring(qp, m, t, n) ?? -1
+        }
         // EXACT / PREFIX
         if m <= n && t[0] == qp[0] && memeq(qp, t, m) {
             if m == n { return Tier.exact.rawValue + fineMax }
@@ -82,12 +90,14 @@ public enum Matcher {
             return -1
         }
         if let s = wordPrefix(q, qp, t, n, ws) { return s }
+        if lowest.rawValue > Tier.acronym.rawValue { return -1 }
         let cm = q.compact.count
         if q.tokens.count == 1 || cm >= 2 {
             if let s = acronym(cp, cm, t, n, ws) { return s }
         }
-        if m < 3 { return -1 }
+        if m < 3 || lowest.rawValue > Tier.substring.rawValue { return -1 }
         if let s = substring(qp, m, t, n) { return s }
+        if lowest.rawValue > Tier.fuzzy.rawValue { return -1 }
         return fuzzy(cp, cm, t, n, ws, scratch)
     }
 

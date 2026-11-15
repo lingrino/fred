@@ -8,9 +8,9 @@ import FredCore
 /// microseconds) and updates the rows in the same run-loop turn, so the result is in
 /// the very next frame — no debouncing, no async hop, nothing stale.
 @MainActor
-final class Launcher: NSObject, NSTextFieldDelegate {
-    let panel = FloatingPanel(width: Theme.width)
-    let field = SearchField()
+final class Launcher: NSObject, QueryFieldDelegate {
+    let panel = FloatingPanel(width: Theme.width, heights: [Theme.fieldHeight] + (1...9).map { Theme.fieldHeight + CGFloat($0) * Theme.rowHeight + Theme.listPadding })
+    let field = QueryField(frame: .zero)
     let list = ResultList(capacity: 9, width: Theme.width)
     let engine: Engine
 
@@ -27,21 +27,37 @@ final class Launcher: NSObject, NSTextFieldDelegate {
     private var mode = Mode.search
     private var query = Matcher.Query(folded: [])
     private var runningApps: [NSRunningApplication] = []
-    let keystrokeLatency = LatencyLog("keystroke→rows")
-    let showLatency = LatencyLog("hotkey→shown")
+    /// search + row update only (CPU, our code)
+    let searchLatency = LatencyLog("keystroke: search+rows")
+    /// key event timestamp → frame drawn and committed to the window server
+    let keystrokeLatency = LatencyLog("keystroke→committed")
+    /// hotkey event timestamp → panel ordered in, drawn and committed
+    let showLatency = LatencyLog("hotkey→committed")
+    // Stage breakdown of a keystroke (see `queryChanged`).
+    let stOS = LatencyLog("  stage: event→app (OS delivery)")
+    let stDeliver = LatencyLog("  stage: event→handler")
+    let stAppKit = LatencyLog("  stage: app received→handler")
+    let stDispatch = LatencyLog("  stage: app received→field keyDown")
+    let stRowsRender = LatencyLog("  stage: rows update")
+    let stDisplay = LatencyLog("  stage: displayIfNeeded")
+    let stFlush = LatencyLog("  stage: CATransaction.flush")
+    let stResize = LatencyLog("  stage: window resize")
+    let stDraw = LatencyLog("  stage: draw+commit")
+    private var resizeNs: UInt64 = 0
 
     init(engine: Engine) {
         self.engine = engine
         super.init()
-        field.frame = NSRect(x: 22, y: (Theme.fieldHeight - 34) / 2, width: Theme.width - 44, height: 34)
+        field.frame = NSRect(x: 22, y: (Theme.fieldHeight - 40) / 2, width: Theme.width - 44, height: 40)
         field.delegate = self
-        field.placeholderString = "Fred"
+        field.placeholder = "Fred"
         panel.content.addSubview(field)
         list.frame.origin = NSPoint(x: 0, y: Theme.fieldHeight)
         panel.content.addSubview(list)
         panel.onResignKey = { [weak self] in self?.hide() }
         panel.keyHandler = { [weak self] e in self?.handleKeyEquivalent(e) ?? false }
         list.onClick = { [weak self] i in self?.activate(i, modifiers: NSEvent.modifierFlags) }
+
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -56,16 +72,50 @@ final class Launcher: NSObject, NSTextFieldDelegate {
     func show(eventTime: Double? = nil) {
         engine.prepareLearning()
         mode = .search
-        field.stringValue = ""
-        field.placeholderString = "Fred"
+        field.text = ""
+        field.placeholder = "Fred"
         render([], [])
         panel.position(height: height())
+        if DevMode.regular { NSApp.activate() }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
-        if let t = eventTime {
-            let ns = UInt64(max(0, (ProcessInfo.processInfo.systemUptime - t) * 1e9))
-            showLatency.add(ns)
+        commitNow()
+        if let t = eventTime { showLatency.add(Self.since(t)) }
+    }
+
+    /// Draws dirty views and pushes the CA transaction now instead of at the end of the
+    /// run-loop turn — same work, but it lets us timestamp the moment the frame leaves.
+    func commitNow() {
+        let a = nowNanos()
+        panel.displayIfNeeded()
+        let b = nowNanos()
+        CATransaction.flush()
+        let c = nowNanos()
+        if panel.alphaValue > 0 { stDisplay.add(b - a); stFlush.add(c - b) }
+    }
+
+    static func since(_ uptime: Double) -> UInt64 {
+        UInt64(max(0, (ProcessInfo.processInfo.systemUptime - uptime) * 1e9))
+    }
+
+    /// Pays first-use costs (glass, fonts, Core Text, code paging) once at launch with an
+    /// invisible, non-key show, so the first real ⌥Space is as fast as the hundredth.
+    func warmUp() {
+        guard !panel.isVisible else { return }
+        panel.alphaValue = 0
+        panel.position(height: panel.maxHeight)
+        panel.orderFrontRegardless()
+        panel.warmGlasses()
+        for q in ["a", "ch", "sys set", "2+2"] {
+            field.text = q
+            queryChanged()
         }
+        field.text = ""
+        render([], [])
+        commitNow()
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+        for l in [searchLatency, keystrokeLatency, stOS, stDeliver, stAppKit, stDispatch, stRowsRender, stResize, stDraw, stDisplay, stFlush, QueryField.renderCost] { l.reset() }
     }
 
     func hide() {
@@ -75,19 +125,38 @@ final class Launcher: NSObject, NSTextFieldDelegate {
 
     // MARK: Typing
 
-    func controlTextDidChange(_ obj: Notification) { queryChanged() }
+    func queryFieldDidChange(_ f: QueryField) { queryChanged() }
 
     func queryChanged() {
         let t0 = nowNanos()
+        resizeNs = 0
+        // Instrumentation: only for keystrokes (not programmatic changes).
+        let fromKey = KeyTiming.received > 0 && t0 - KeyTiming.received < 50_000_000
+        let eventTime = KeyTiming.eventTime
+        if fromKey {
+            let osNs = KeyTiming.received - min(KeyTiming.received, UInt64(max(0, eventTime) * 1e9))
+            _ = osNs
+            stOS.add(UInt64(max(0, (Double(KeyTiming.received) / 1e9 - eventTime) * 1e9)))
+            stDeliver.add(Self.since(eventTime))
+            stAppKit.add(t0 - KeyTiming.received)
+            if QueryField.keyDownAt >= KeyTiming.received { stDispatch.add(QueryField.keyDownAt - KeyTiming.received) }
+            KeyTiming.received = 0
+        }
         if case .contact = mode { mode = .search }
-        let text = field.stringValue
+        let text = field.text
         query = Matcher.Query(text)
         switch mode {
         case .forceQuit: renderForceQuit()
         default: renderSearch(text)
         }
-        let dt = nowNanos() - t0
-        keystrokeLatency.add(dt)
+        searchLatency.add(nowNanos() - t0 - resizeNs)
+        if panel.isVisible && panel.alphaValue > 0 {
+            stResize.add(resizeNs)
+            let t1 = nowNanos()
+            commitNow()
+            stDraw.add(nowNanos() - t1)
+            if fromKey { keystrokeLatency.add(Self.since(eventTime)) }
+        }
     }
 
     private func renderSearch(_ text: String) {
@@ -102,7 +171,7 @@ final class Launcher: NSObject, NSTextFieldDelegate {
             let cat = engine.searcher.catalog
             for i in 0..<top.count {
                 let item = top.item(i)
-                rows.append(.init(title: cat.titles[item], icon: .atlas(engine.icon(item))))
+                rows.append(.init(title: cat.titles[item], icon: .atlas(engine.icon(item)), titleItem: item))
                 r.append(.item(item))
             }
         }
@@ -111,8 +180,12 @@ final class Launcher: NSObject, NSTextFieldDelegate {
 
     private func render(_ rows: [ResultList.Row], _ r: [Ref], selected: Int = 0) {
         refs = r
+        let tr = nowNanos()
         list.set(rows, selected: selected)
+        stRowsRender.add(nowNanos() - tr)
+        let t = nowNanos()
         panel.setHeight(height())
+        resizeNs = nowNanos() - t
     }
 
     private func height() -> CGFloat {
@@ -121,31 +194,25 @@ final class Launcher: NSObject, NSTextFieldDelegate {
 
     // MARK: Keys
 
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-        switch sel {
-        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveDownAndModifySelection(_:)):
-            if !refs.isEmpty { list.select((list.selected + 1) % refs.count) }
-            return true
-        case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveUpAndModifySelection(_:)):
-            if !refs.isEmpty { list.select((list.selected - 1 + refs.count) % refs.count) }
-            return true
-        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)):
-            activate(list.selected, modifiers: NSEvent.modifierFlags)
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
+    func queryField(_ f: QueryField, command: QueryField.Command) -> Bool {
+        switch command {
+        case .down:
+            if !refs.isEmpty { list.select((list.selected + 1) % refs.count); commitNow() }
+        case .up:
+            if !refs.isEmpty { list.select((list.selected - 1 + refs.count) % refs.count); commitNow() }
+        case .enter: activate(list.selected, modifiers: [])
+        case .commandEnter: activate(list.selected, modifiers: .command)
+        case .escape:
             switch mode {
             case .search: hide()
             case .contact, .forceQuit:
                 mode = .search
-                field.placeholderString = "Fred"
+                field.placeholder = "Fred"
                 queryChanged()
             }
-            return true
-        case #selector(NSResponder.insertTab(_:)):
-            return true   // reserved
-        default:
-            return false
+        case .pageUp, .pageDown, .tab: break
         }
+        return true
     }
 
     /// ⌘1…⌘9 pick a row; ⌘↩ alternate action; ⌘O open contact in Contacts.app.
@@ -154,10 +221,6 @@ final class Launcher: NSObject, NSTextFieldDelegate {
         guard mods.contains(.command) else { return false }
         if let ch = e.charactersIgnoringModifiers, let d = Int(ch), d >= 1, d <= 9, mods == .command {
             if d <= refs.count { activate(d - 1, modifiers: []) }
-            return true
-        }
-        if e.keyCode == 36 || e.keyCode == 76 {   // ⌘↩
-            activate(list.selected, modifiers: .command)
             return true
         }
         if e.charactersIgnoringModifiers == "o", case .contact(let card) = mode {
@@ -236,8 +299,8 @@ final class Launcher: NSObject, NSTextFieldDelegate {
         runningApps = NSWorkspace.shared.runningApplications.filter {
             $0.activationPolicy == .regular && $0.processIdentifier != getpid()
         }
-        field.stringValue = ""
-        field.placeholderString = "Force quit…"
+        field.text = ""
+        field.placeholder = "Force quit…"
         query = Matcher.Query(folded: [])
         renderForceQuit()
     }
@@ -260,23 +323,6 @@ final class Launcher: NSObject, NSTextFieldDelegate {
         }
         render(rows, r)
     }
-}
-
-/// The search field. Plain NSTextField (keeps IME, undo, accessibility) styled flat.
-final class SearchField: NSTextField {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        isBordered = false
-        drawsBackground = false
-        focusRingType = .none
-        font = Theme.fieldFont
-        usesSingleLineMode = true
-        cell?.wraps = false
-        cell?.isScrollable = true
-        isAutomaticTextCompletionEnabled = false
-    }
-    convenience init() { self.init(frame: .zero) }
-    required init?(coder: NSCoder) { fatalError() }
 }
 
 extension Matcher {

@@ -166,6 +166,14 @@ func tier(_ query: String, _ text: String) -> Matcher.Tier? {
         #expect(r.contains("Finder"))
     }
 
+    @Test func bookmarkHostsDropTLD() {
+        #expect(ChromeBookmarks.host("https://www.example.com/pulls") == "example")
+        #expect(ChromeBookmarks.host("https://docs.example.com/x") == "docs.example")
+        #expect(ChromeBookmarks.host("https://bbc.co.uk/news") == "bbc")
+        #expect(ChromeBookmarks.host("http://localhost:3000/") == "localhost")
+        #expect(ChromeBookmarks.host("http://10.0.0.1/") == "10.0.0.1")
+    }
+
     @Test func packedQueryPrefixRanges() {
         let a = PackedQuery(Fold.query("fin")), b = PackedQuery(Fold.query("f"))
         #expect(a.hasPrefix(b))

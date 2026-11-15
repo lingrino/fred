@@ -1,26 +1,30 @@
 import AppKit
 
-/// Renders a view hierarchy to a PNG via `cacheDisplay` (development aid; see
-/// ControlServer `snapshot`). The glass backdrop is replaced by an opaque fill.
+/// Renders a view's layer tree to a PNG (development aid; see ControlServer
+/// `snapshot`). Works because Fred's UI is CGImage-backed layers; the glass backdrop
+/// (rendered by the window server) is replaced by an opaque fill.
 @MainActor
 enum Snapshot {
-    static func write(view: NSView, to path: String) -> String {
+    static func write(view: NSView, to path: String, scale: CGFloat = 2) -> String {
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no rep" }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        // Composite over an opaque background so the PNG is readable.
-        let size = NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
-        let out = NSImage(size: size)
-        out.lockFocus()
+        CATransaction.flush()
+        guard let layer = view.layer else { return "no layer" }
+        let size = view.bounds.size
+        let w = Int(size.width * scale), h = Int(size.height * scale)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return "no ctx" }
         view.effectiveAppearance.performAsCurrentDrawingAppearance {
-            NSColor.windowBackgroundColor.setFill()
+            ctx.setFillColor(NSColor.windowBackgroundColor.cgColor)
         }
-        NSRect(origin: .zero, size: size).fill()
-        rep.draw(in: NSRect(origin: .zero, size: size))
-        out.unlockFocus()
-        guard let tiff = out.tiffRepresentation, let bmp = NSBitmapImageRep(data: tiff),
-              let png = bmp.representation(using: .png, properties: [:]) else { return "encode failed" }
-        do { try png.write(to: URL(fileURLWithPath: path)) } catch { return "write failed: \(error)" }
-        return "wrote \(path) \(rep.pixelsWide)x\(rep.pixelsHigh)"
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.scaleBy(x: scale, y: scale)
+        if view.isFlipped { ctx.translateBy(x: 0, y: size.height); ctx.scaleBy(x: 1, y: -1) }
+        layer.render(in: ctx)
+        guard let img = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)
+        else { return "encode failed" }
+        CGImageDestinationAddImage(dest, img, nil)
+        return CGImageDestinationFinalize(dest) ? "wrote \(path) \(w)x\(h)" : "write failed"
     }
 }

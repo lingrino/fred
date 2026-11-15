@@ -15,6 +15,9 @@ public struct TopK: Sendable {
     public func item(_ i: Int) -> Int { Int(items[i]) }
     public func score(_ i: Int) -> Int32 { scores[i] }
 
+    /// Score an insertion must reach to enter (when full).
+    @inline(__always) var floor: Int32 { count < k ? .min : scores[k - 1] }
+
     mutating func dropBelow(_ threshold: Int32) {
         while count > 0 && scores[count - 1] < threshold { count -= 1 }
     }
@@ -60,6 +63,18 @@ public enum Ranking {
         if role == 1 { fine -= 5 }
         fine = max(0, min(99, fine))   // ≤ fineMax(79) + prior(20)
         return base + fine - (role == 2 ? 100 : 0)
+    }
+
+    /// The weakest tier whose best possible final score (fine 99, this item's learning)
+    /// still reaches `floor`. Secondary-role entries score 100 lower, so this is an upper
+    /// bound for them too.
+    @inline(__always)
+    static func lowestUsefulTier(floor: Int32, learned: Int32) -> Matcher.Tier {
+        if floor == .min { return .fuzzy }
+        if Matcher.Tier.fuzzy.rawValue + 99 + learned / 4 >= floor { return .fuzzy }
+        if Matcher.Tier.substring.rawValue + 99 + learned / 2 >= floor { return .substring }
+        if Matcher.Tier.acronym.rawValue + 99 + learned >= floor { return .acronym }
+        return .wordPrefix
     }
 
     /// Learning can lift strong tiers fully, weak tiers only partly: garbage never wins.
@@ -136,24 +151,34 @@ public final class Searcher {
         let minLen = query.compact.count
         let latch = self.latch
         var bestUnpinned = Int32.min
+        let q0bit = Fold.charBit(query.bytes[0])
         query.bytes.withUnsafeBufferPointer { qb in
             query.compact.withUnsafeBufferPointer { cb in
                 let qp = qb.baseAddress!, cp = cb.baseAddress!
                 let masks = idx.masks, spans = idx.spans, starts = idx.starts, items = idx.items, bytes = idx.bytes
+                let initials = idx.initials
                 let base = self.base, sparse = self.sparse, scratch = self.scratch
                 for e in 0..<idx.count {
                     if masks[e] & qm != qm { continue }
+                    let initialHit = initials[e] & q0bit != 0
+                    if !initialHit && m < 3 { continue }
                     let sp = spans[e]
                     let n = Int(sp & 0xFF)
                     if n < minLen { continue }
                     let packed = items[e]
                     let kind = Int(packed >> 24 & 0xF)
-                    let raw = Matcher.score(query, qp, cp, bytes + Int(sp >> 8), n, starts[e],
-                                            allowLoose: kind != Int(Catalog.Kind.bookmark.rawValue), scratch)
-                    if raw < 0 { continue }
                     let item = Int(packed & 0xFF_FFFF)
-                    let s = Ranking.adjust(raw, kind: kind, role: Int(packed >> 28))
                     let learned = min(base[item] &+ sparse[item], Ranking.maxLearned)
+                    // Branch and bound: skip tiers that can't beat what we already have,
+                    // even at their best fine score with this item's learning.
+                    let floor = max(top.floor, bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
+                    let lowest = Ranking.lowestUsefulTier(floor: floor, learned: learned)
+                    if !initialHit && lowest.rawValue > Matcher.Tier.substring.rawValue { continue }
+                    let raw = Matcher.score(query, qp, cp, bytes + Int(sp >> 8), n, starts[e],
+                                            allowLoose: kind != Int(Catalog.Kind.bookmark.rawValue), scratch,
+                                            lowest: lowest, initialHit: initialHit)
+                    if raw < 0 { continue }
+                    let s = Ranking.adjust(raw, kind: kind, role: Int(packed >> 28))
                     var final = Ranking.blend(s, learned: learned)
                     if final > bestUnpinned { bestUnpinned = final }
                     if item == latch && s >= Matcher.Tier.acronym.rawValue { final += Ranking.latchBonus }
