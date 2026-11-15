@@ -80,9 +80,12 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             return
         }
         let hasString = types.contains(.string)
-        if !hasString, let (data, type) = imageData(pb, types) {
+        if !hasString, let type = [NSPasteboard.PasteboardType.png, .tiff].first(where: { types.contains($0) }) {
+            // Image data can be tens of MB: read, hash, convert and write off the main thread.
+            let change = pb.changeCount
             io.async { [weak self] in
-                guard let self else { return }
+                guard let self, NSPasteboard.general.changeCount == change,
+                      let data = NSPasteboard.general.data(forType: type) else { return }
                 let h = data.withUnsafeBytes { ClipStore.hash($0, seed: 1) }
                 guard let (png, w, hgt) = Self.pngAndSize(data, type: type) else { return }
                 let url = self.store.imagesDir!.appendingPathComponent(String(format: "%016llx.png", h))
@@ -99,13 +102,6 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
            !s.allSatisfy({ $0.isWhitespace }) {
             store.add(kind: .text, text: s, hash: ClipStore.hash(s, kind: .text), app: source, time: now)
         }
-    }
-
-    private func imageData(_ pb: NSPasteboard, _ types: [NSPasteboard.PasteboardType]) -> (Data, NSPasteboard.PasteboardType)? {
-        for t in [NSPasteboard.PasteboardType.png, .tiff] where types.contains(t) {
-            if let d = pb.data(forType: t) { return (d, t) }
-        }
-        return nil
     }
 
     /// Keeps PNG as-is; converts anything else (TIFF) to PNG. Returns pixel size.
