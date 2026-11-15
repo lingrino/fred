@@ -182,7 +182,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
 
     private func buildUI() {
         field.frame = NSRect(x: 22, y: (Theme.fieldHeight - 40) / 2, width: ClipTheme.width - 44, height: 40)
-        field.placeholder = "Clipboard"
+        field.placeholder = ""
         field.delegate = self
         panel.content.addSubview(field)
         list.frame.origin = NSPoint(x: 0, y: Theme.fieldHeight)
