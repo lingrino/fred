@@ -52,8 +52,15 @@ Toolchain quirks on this machine (Command Line Tools only, no Xcode):
 
 contacts (Contacts) · postEvents ("Device Control and Data Access" = Accessibility, for ⌘V)
 · pasteboard (Paste from Other Apps = Allow) · chromeData (Files & Folders → Google Chrome;
-macOS 27 blocks other apps from Chrome's profile dir) · finder (Automation, Empty Trash).
+macOS 27 blocks other apps from Chrome's profile dir) · finder (Automation, Empty Trash)
+· loginwindow (Automation, Sleep/Restart/Shut Down).
 Fred re-checks empty sources when the launcher opens, so grants given while running apply.
+
+**Never call AEDeterminePermissionToAutomateTarget or send Apple Events on the main
+thread.** While a consent prompt is on screen they block (even with askUserIfNeeded=false,
+from other threads) — that froze the whole app once. `Permissions.refreshAutomation` runs
+on its own queue and main only reads the cached result; `Actions.sendToLoginWindow` and
+`emptyTrash` dispatch to background queues.
 
 ## Architecture
 

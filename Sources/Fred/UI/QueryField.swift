@@ -28,7 +28,7 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
 
     weak var delegate: QueryFieldDelegate?
     var font: NSFont = Theme.fieldFont { didSet { relayout() } }
-    var placeholder = "" { didSet { renderPlaceholder() } }
+    var placeholder = "" { didSet { if placeholder != oldValue { renderPlaceholder() } } }
 
     private let storage = NSMutableString()
     private var selection = NSRange(location: 0, length: 0)
