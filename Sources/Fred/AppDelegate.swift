@@ -36,7 +36,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var marks: [(String, UInt64)] = []
         func mark(_ s: String) { marks.append((s, nowNanos())) }
 
-        // Indexing first: it runs on its own queue and overlaps everything below.
+        // Hotkeys first: registered before any UI exists (a press during startup is
+        // simply handled once the main thread gets to it).
+        HotKeys.register(keyCode: Self.launcherKey.code, modifiers: Self.launcherKey.mods) { [weak self] t in
+            guard let self, let launcher = self.launcher else { return }
+            self.clipboard?.hide()
+            launcher.toggle(eventTime: t)
+            self.retryMissingSources()
+        }
+        HotKeys.register(keyCode: Self.clipboardKey.code, modifiers: Self.clipboardKey.mods) { [weak self] _ in
+            self?.launcher?.hide()
+            self?.clipboard?.toggle()
+        }
+        mark("hotkeys")
+
+        // Indexing next: it runs on its own queue and overlaps everything below.
         indexer.onCatalog = { [weak self] c, apps, panes in
             self?.engine.setCatalog(c, apps: apps, panes: panes)
         }
@@ -47,19 +61,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mark("engine")
         launcher = Launcher(engine: engine)
         mark("launcher ui")
-        HotKeys.register(keyCode: Self.launcherKey.code, modifiers: Self.launcherKey.mods) { [weak self] t in
-            self?.clipboard?.hide()
-            self?.launcher.toggle(eventTime: t)
-            self?.retryMissingSources()
-        }
-        mark("hotkey")
 
         clipboard = ClipboardController(engine: engine)
         clipboard?.startMonitoring()
-        HotKeys.register(keyCode: Self.clipboardKey.code, modifiers: Self.clipboardKey.mods) { [weak self] _ in
-            self?.launcher.hide()
-            self?.clipboard?.toggle()
-        }
         mark("clipboard")
         engine.onTitles = { [weak self] t in self?.launcher.list.titles = t }
         engine.onAtlas = { [weak self] a in
