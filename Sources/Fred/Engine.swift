@@ -68,7 +68,7 @@ final class Engine {
         for a in apps { if let id = a.bundleID { byID[id] = (a.path, a.name) } }
         appsByID = byID
         learning.prepare(catalog: c, into: searcher, now: now)
-        let paths = apps.map(\.path) + panes.map(\.path)
+        let paths = apps.map(\.path) + panes.map(\.path) + [Bundle.main.bundlePath]
         if paths != atlasPaths {
             atlasPaths = paths
             // Render icons off-main; rows show no icon for the first few ms after launch.
@@ -113,7 +113,7 @@ final class Engine {
                 case .restart: icons[i] = a.slot(.restart)
                 case .shutDown: icons[i] = a.slot(.shutDown)
                 case .forceQuit: icons[i] = a.slot(.forceQuit)
-                case .quitFred, .restartFred, .none: icons[i] = a.slot(.fred)
+                case .quitFred, .restartFred, .none: icons[i] = a.slot(path: Bundle.main.bundlePath) ?? a.slot(.fred)
                 }
             }
         }
