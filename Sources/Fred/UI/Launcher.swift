@@ -60,26 +60,41 @@ final class Launcher: NSObject, QueryFieldDelegate {
 
     }
 
-    var isVisible: Bool { panel.isVisible }
+    var isVisible: Bool { panel.shown }
 
     // MARK: Show / hide
 
     func toggle(eventTime: Double? = nil) {
-        if panel.isVisible { hide(); return }
+        if panel.shown { hide(); return }
         show(eventTime: eventTime)
     }
 
+    let shDeliver = LatencyLog("  show: hotkey event→handler")
+    let shPrep = LatencyLog("  show: reset state")
+    let shPosition = LatencyLog("  show: position")
+    let shOrder = LatencyLog("  show: orderFront")
+    let shKey = LatencyLog("  show: makeKey")
+    let shCommit = LatencyLog("  show: commit")
+
     func show(eventTime: Double? = nil) {
+        let t0 = nowNanos()
+        if let t = eventTime { shDeliver.add(Self.since(t)) }
         engine.prepareLearning()
         mode = .search
         field.text = ""
         field.placeholder = "Fred"
         render([], [])
+        let t1 = nowNanos()
         panel.position(height: height())
+        let t2 = nowNanos()
         if DevMode.regular { NSApp.activate() }
-        panel.makeKeyAndOrderFront(nil)
+        let t2b = nowNanos()
+        panel.present()
         panel.makeFirstResponder(field)
+        let t3 = nowNanos()
         commitNow()
+        let t4 = nowNanos()
+        shPrep.add(t1 - t0); shPosition.add(t2 - t1); shOrder.add(t2b - t2); shKey.add(t3 - t2b); shCommit.add(t4 - t3)
         if let t = eventTime { showLatency.add(Self.since(t)) }
     }
 
@@ -101,7 +116,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
     /// Pays first-use costs (glass, fonts, Core Text, code paging) once at launch with an
     /// invisible, non-key show, so the first real ⌥Space is as fast as the hundredth.
     func warmUp() {
-        guard !panel.isVisible else { return }
+        guard !panel.shown else { return }
         panel.alphaValue = 0
         panel.position(height: panel.maxHeight)
         panel.orderFrontRegardless()
@@ -113,14 +128,13 @@ final class Launcher: NSObject, QueryFieldDelegate {
         field.text = ""
         render([], [])
         commitNow()
-        panel.orderOut(nil)
-        panel.alphaValue = 1
+        panel.park()
         for l in [searchLatency, keystrokeLatency, stOS, stDeliver, stAppKit, stDispatch, stRowsRender, stResize, stDraw, stDisplay, stFlush, QueryField.renderCost] { l.reset() }
     }
 
     func hide() {
-        guard panel.isVisible else { return }
-        panel.orderOut(nil)
+        guard panel.shown else { return }
+        panel.park()
     }
 
     // MARK: Typing
@@ -150,7 +164,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
         default: renderSearch(text)
         }
         searchLatency.add(nowNanos() - t0 - resizeNs)
-        if panel.isVisible && panel.alphaValue > 0 {
+        if panel.shown {
             stResize.add(resizeNs)
             let t1 = nowNanos()
             commitNow()

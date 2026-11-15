@@ -86,6 +86,12 @@ final class ControlServer: @unchecked Sendable {
             \(l.stResize.summary)
             \(l.stDraw.summary)
             \(l.showLatency.summary)
+            \(l.shDeliver.summary)
+            \(l.shPrep.summary)
+            \(l.shPosition.summary)
+            \(l.shOrder.summary)
+            \(l.shKey.summary)
+            \(l.shCommit.summary)
             \(app.clipboard?.statsLine ?? "clipboard: off")
             memory: \(residentMB()) MB resident
             login item: \(LoginItem.statusLine)
@@ -138,7 +144,7 @@ final class ControlServer: @unchecked Sendable {
             l.field.text = bits.count > 1 ? bits[1] : ""
             l.queryChanged()
             let r = Snapshot.write(view: l.panel.content, to: out)
-            if !wasVisible { l.panel.orderOut(nil); l.panel.alphaValue = 1 }
+            if !wasVisible { l.panel.park() }
             return r
         case "card":
             // card <png> <query>: show the first contact result's card offscreen.
@@ -148,7 +154,7 @@ final class ControlServer: @unchecked Sendable {
             l.field.text = bits[1]
             l.queryChanged()
             let r = l.openFirstContact() ? Snapshot.write(view: l.panel.content, to: bits[0]) : "no contact result"
-            l.panel.orderOut(nil); l.panel.alphaValue = 1
+            l.panel.park()
             return r
         case "learn": return e.learning.debugDescription(catalog: e.catalog)
         case "reindex": app.indexer.reloadAll(); return "ok"

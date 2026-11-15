@@ -147,18 +147,29 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         }
     }
 
-    func toggle() { panel.isVisible ? hide() : show() }
+    func toggle() { panel.shown ? hide() : show() }
 
     func show() {
         field.text = ""
         refresh()
         panel.position(height: ClipTheme.height)
         if DevMode.regular { NSApp.activate() }
-        panel.makeKeyAndOrderFront(nil)
+        panel.present()
         panel.makeFirstResponder(field)
     }
 
-    func hide() { if panel.isVisible { panel.orderOut(nil) } }
+    func hide() { if panel.shown { panel.park() } }
+
+    /// Renders once invisibly and parks, so the first ⌥⇧C pays no first-render cost.
+    func warmUp() {
+        panel.alphaValue = 0
+        panel.position(height: ClipTheme.height)
+        panel.orderFrontRegardless()
+        refresh()
+        panel.displayIfNeeded()
+        CATransaction.flush()
+        panel.park()
+    }
 
     func queryFieldDidChange(_ f: QueryField) { refresh() }
 
@@ -306,15 +317,20 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             for i in r.sorted(by: >) { store.delete(i) }
             return "deleted \(r.count)"
         case "show": show(); return "ok"
+        case "pick":
+            // pick <n>: paste visible row n (testing the real paste path).
+            guard panel.shown, parts.count > 1, let n = Int(parts[1]), n < results.count else { return "panel not shown / bad index" }
+            paste(n, andPaste: true)
+            return "pasted \(n)"
         case "snapshot":
             guard parts.count > 1 else { return "usage: clip snapshot <png> [query]" }
             let bits = parts[1].split(separator: " ", maxSplits: 1).map(String.init)
-            let was = panel.isVisible
+            let was = panel.shown
             if !was { panel.alphaValue = 0; panel.position(height: ClipTheme.height); panel.orderFrontRegardless() }
             field.text = bits.count > 1 ? bits[1] : ""
             refresh()
             let r = Snapshot.write(view: panel.content, to: bits[0])
-            if !was { panel.orderOut(nil); panel.alphaValue = 1 }
+            if !was { panel.park() }
             return r
         default: return "clip: search <q> | show | snapshot <png> [q]"
         }

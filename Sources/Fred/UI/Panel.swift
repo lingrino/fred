@@ -24,8 +24,16 @@ class FloatingPanel: NSPanel {
     /// glass view costs neither.
     let maxHeight: CGFloat
     private let root = FlippedView()
-    private var glasses: [(height: CGFloat, view: NSGlassEffectView)] = []
-    private var current: NSGlassEffectView?
+    private var glasses: [(height: CGFloat, view: NSView)] = []
+    private var current: NSView?
+    /// Backdrop A/B (`defaults write dev.fred.Fred debugBackdrop <name>`): "vibrancy"
+    /// (default: NSVisualEffectView, state pinned active), "glass" (NSGlassEffectView per
+    /// height), "oneglass", "plain".
+    ///
+    /// Why not Liquid Glass by default: measured on this Mac, NSGlassEffectView re-renders
+    /// on every key-state change (~10 ms in displayIfNeeded each time the panel shows) and
+    /// ~1 ms per resize. Vibrancy: hotkey→committed 2.2 ms vs 13 ms with glass.
+    static let backdrop = UserDefaults.standard.string(forKey: "debugBackdrop") ?? "vibrancy"
 
     init(width: CGFloat, heights: [CGFloat]) {
         maxHeight = heights.max() ?? 64
@@ -46,10 +54,30 @@ class FloatingPanel: NSPanel {
 
         root.frame = NSRect(x: 0, y: 0, width: width, height: maxHeight)
         root.wantsLayer = true
-        for h in Set(heights).sorted() {
-            let g = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: width, height: h))
-            g.style = .regular
-            g.cornerRadius = Theme.cornerRadius
+        let hs = Self.backdrop == "oneglass" ? [heights.max() ?? 64] : Array(Set(heights)).sorted()
+        for h in hs {
+            let frame = NSRect(x: 0, y: 0, width: width, height: h)
+            let g: NSView
+            if Self.backdrop == "plain" {
+                g = NSView(frame: frame)
+                g.wantsLayer = true
+                g.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+                g.layer?.cornerRadius = Theme.cornerRadius
+            } else if Self.backdrop == "vibrancy" {
+                let v = NSVisualEffectView(frame: frame)
+                v.material = .popover
+                v.blendingMode = .behindWindow
+                v.state = .active          // same look key or not: no re-render on focus change
+                v.wantsLayer = true
+                v.layer?.cornerRadius = Theme.cornerRadius
+                v.layer?.masksToBounds = true
+                g = v
+            } else {
+                let ge = NSGlassEffectView(frame: frame)
+                ge.style = .regular
+                ge.cornerRadius = Theme.cornerRadius
+                g = ge
+            }
             g.isHidden = true
             root.addSubview(g)
             glasses.append((h, g))
@@ -61,7 +89,8 @@ class FloatingPanel: NSPanel {
         setHeight(heights.min() ?? 64)
     }
 
-    override var canBecomeKey: Bool { true }
+    /// Never key while parked: an invisible key window would swallow the user's typing.
+    override var canBecomeKey: Bool { shown }
 
     /// Plain key-downs go straight to the query field's fast path, skipping NSWindow's
     /// dispatch (key-equivalent scans, input-context setup): ~100 µs per keystroke.
@@ -100,6 +129,34 @@ class FloatingPanel: NSPanel {
     override func resignKey() {
         super.resignKey()
         onResignKey?()
+    }
+
+    // MARK: Showing without re-rendering the glass
+    //
+    // Ordering a window out discards its rendered state; on the next order-in, the
+    // NSGlassEffectViews rebuild — measured ~10 ms on the show path. So the panel is
+    // only ordered out for an instant on hide (that is what hands keyboard focus back to
+    // the previous app), then ordered straight back in invisible and click-through.
+    // Showing is then just: alpha 1, accept mouse, become key.
+
+    private(set) var shown = false
+
+    /// Visible + key. The panel is normally already ordered in (parked).
+    func present() {
+        shown = true
+        alphaValue = 1
+        ignoresMouseEvents = false
+        if !isVisible { orderFrontRegardless() }
+        makeKey()
+    }
+
+    /// Invisible, not key, still ordered in so its layers (and the glass) stay rendered.
+    func park() {
+        shown = false
+        if isKeyWindow || isVisible { orderOut(nil) }   // gives key focus back
+        alphaValue = 0
+        ignoresMouseEvents = true
+        orderFrontRegardless()
     }
 
     /// Places the panel horizontally centered, its top edge at a fixed fraction of the

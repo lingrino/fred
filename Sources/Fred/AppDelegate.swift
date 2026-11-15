@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         engine.onReady = { [weak self] in
             self?.launcher.warmUp()
+            self?.clipboard?.warmUp()
             Log.info("ready \((nowNanos() - t0) / 1000) µs after launch")
         }
         indexer.onCatalog = { [weak self] c, apps, panes in
