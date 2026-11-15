@@ -30,8 +30,21 @@ final class Engine {
     var catalog: Catalog { searcher.catalog }
     var now: UInt32 { UInt32(Date().timeIntervalSince1970) }
 
+    /// bundle id → (path, display name), for clipboard source-app icons and names.
+    private var appsByID: [String: (path: String, name: String)] = [:]
+
+    func appSlot(bundleID: String) -> Int32? {
+        guard let p = appsByID[bundleID]?.path else { return nil }
+        return atlas?.slot(path: p)
+    }
+
+    func appName(bundleID: String) -> String? { appsByID[bundleID]?.name }
+
     func setCatalog(_ c: Catalog, apps: [AppScanner.App], panes: [SettingsScanner.Pane]) {
         searcher.setCatalog(c)
+        var byID: [String: (path: String, name: String)] = [:]
+        for a in apps { if let id = a.bundleID { byID[id] = (a.path, a.name) } }
+        appsByID = byID
         learning.prepare(catalog: c, into: searcher, now: now)
         let paths = apps.map(\.path) + panes.map(\.path)
         if paths != atlasPaths {

@@ -22,10 +22,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let t0 = nowNanos()
         engine = Engine()
         launcher = Launcher(engine: engine)
-        engine.onAtlas = { [weak self] a in self?.launcher.list.atlas = a }
 
         HotKeys.register(keyCode: Self.launcherKey.code, modifiers: Self.launcherKey.mods) { [weak self] t in
+            self?.clipboard?.hide()
             self?.launcher.toggle(eventTime: t)
+        }
+
+        clipboard = ClipboardController(engine: engine)
+        clipboard?.startMonitoring()
+        HotKeys.register(keyCode: Self.clipboardKey.code, modifiers: Self.clipboardKey.mods) { [weak self] _ in
+            self?.launcher.hide()
+            self?.clipboard?.toggle()
+        }
+        engine.onAtlas = { [weak self] a in
+            self?.launcher.list.atlas = a
+            self?.clipboard?.list.atlas = a
         }
 
         indexer.onCatalog = { [weak self] c, apps, panes in

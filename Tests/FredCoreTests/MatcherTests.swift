@@ -154,6 +154,18 @@ func tier(_ query: String, _ text: String) -> Matcher.Tier? {
         #expect(titles(s, "f", learn, now: t).first == "Finder")
     }
 
+    @Test func latchPinsWithoutHidingOthers() {
+        let c = catalog()
+        let s = Searcher(c)
+        let learn = Learning(logURL: nil)
+        var t: UInt32 = 1_800_000_000
+        for _ in 0..<4 { learn.record(.init(time: t, key: c.keys[1], query: Fold.query("f"), row: 1)); t += 60 }
+        learn.prepare(catalog: c, into: s, now: t)
+        let r = titles(s, "f", learn, now: t)
+        #expect(r.first == "FaceTime")
+        #expect(r.contains("Finder"))
+    }
+
     @Test func packedQueryPrefixRanges() {
         let a = PackedQuery(Fold.query("fin")), b = PackedQuery(Fold.query("f"))
         #expect(a.hasPrefix(b))

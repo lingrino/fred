@@ -135,6 +135,7 @@ public final class Searcher {
         let qm = query.mask
         let minLen = query.compact.count
         let latch = self.latch
+        var bestUnpinned = Int32.min
         query.bytes.withUnsafeBufferPointer { qb in
             query.compact.withUnsafeBufferPointer { cb in
                 let qp = qb.baseAddress!, cp = cb.baseAddress!
@@ -154,13 +155,15 @@ public final class Searcher {
                     let s = Ranking.adjust(raw, kind: kind, role: Int(packed >> 28))
                     let learned = min(base[item] &+ sparse[item], Ranking.maxLearned)
                     var final = Ranking.blend(s, learned: learned)
+                    if final > bestUnpinned { bestUnpinned = final }
                     if item == latch && s >= Matcher.Tier.acronym.rawValue { final += Ranking.latchBonus }
                     // Ties: more learned first, then shorter entries.
                     top.insert(item: Int32(item), score: final, tie: learned << 8 | Int32(255 - n))
                 }
             }
         }
-        top.dropBelow(top.count > 0 ? top.score(0) - Ranking.relativeCutoff : .min)
+        // Relative cutoff ignores the latch pin, so a pinned row doesn't hide the rest.
+        top.dropBelow(bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff)
         return top
     }
 }
