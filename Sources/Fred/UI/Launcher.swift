@@ -145,11 +145,9 @@ final class Launcher: NSObject, QueryFieldDelegate {
         let t0 = nowNanos()
         resizeNs = 0
         // Instrumentation: only for keystrokes (not programmatic changes).
-        let fromKey = KeyTiming.received > 0 && t0 - KeyTiming.received < 50_000_000
+        let fromKey = KeyTiming.received > 0 && t0 >= KeyTiming.received && t0 - KeyTiming.received < 50_000_000
         let eventTime = KeyTiming.eventTime
         if fromKey {
-            let osNs = KeyTiming.received - min(KeyTiming.received, UInt64(max(0, eventTime) * 1e9))
-            _ = osNs
             stOS.add(UInt64(max(0, (Double(KeyTiming.received) / 1e9 - eventTime) * 1e9)))
             stDeliver.add(Self.since(eventTime))
             stAppKit.add(t0 - KeyTiming.received)
