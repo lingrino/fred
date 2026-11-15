@@ -201,6 +201,12 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             self.selected = self.offset + i
             self.paste(self.selected, andPaste: true)
         }
+        list.onHover = { [weak self] i in
+            guard let self, self.offset + i < self.results.count else { return }
+            self.selected = self.offset + i
+            self.selectedHash = self.store.hash[self.results[self.selected]]
+            self.preview.show(self.results[self.selected], store: self.store, engine: self.engine)
+        }
     }
 
     func toggle() { panel.shown ? hide() : show() }

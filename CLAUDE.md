@@ -13,7 +13,8 @@ preferences UI and there should not be one.
   selected row, ⌘1…⌘5 = row n, ↑↓/⌃N⌃P move, Esc closes, ⌘↩ reveals an app in Finder.
   Contact → card of phones/emails/addresses: Enter (or ⌘n/click) pastes the value into the
   front app, ⌘C copies it and closes, ⌘O opens Contacts.app. Esc always closes Fred.
-  "Force Quit…" → running-app list.
+  "Force Quit…" → running-app list. Moving the mouse over a row selects it (only real
+  movement; rows changing under a still pointer don't steal the selection).
 - **Clipboard history** (⌘⇧C): text, images, file lists; 90 days; token-AND substring
   search; Enter pastes into the frontmost app, ⌘↩ copies only, ⌘⌫ deletes, ⌘1…⌘9.
 - **Not** in scope (user said so): file search/indexing, snippets, web search fallbacks,

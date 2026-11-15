@@ -40,6 +40,9 @@ final class ResultList: FlippedView {
     var atlas: IconAtlas? { didSet { for r in rowViews { r.atlas = atlas } } }
     var titles: TitleAtlas? { didSet { for r in rowViews { r.titles = titles } } }
     var onClick: ((Int) -> Void)?
+    /// Called after the mouse moved onto a different row and selected it.
+    var onHover: ((Int) -> Void)?
+    private var lastMouse: NSPoint?
 
     init(capacity: Int, rowHeight: CGFloat = Theme.rowHeight, width: CGFloat) {
         self.capacity = capacity
@@ -93,6 +96,28 @@ final class ResultList: FlippedView {
         rowViews[selected].setSelected(false)
         rowViews[new].setSelected(true)
         selected = new
+    }
+
+    // MARK: Hover selects
+    //
+    // Only real pointer movement selects a row: rows changing under a still pointer
+    // (typing) don't move the selection, and sub-2-pt jitter is ignored.
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if trackingAreas.isEmpty {
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                           owner: self, userInfo: nil))
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let last = lastMouse, abs(p.x - last.x) < 2, abs(p.y - last.y) < 2 { return }
+        lastMouse = p
+        guard let i = row(at: p), i != selected else { return }
+        select(i)
+        onHover?(i)
     }
 
     override func mouseDown(with event: NSEvent) {
