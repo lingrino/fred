@@ -40,3 +40,5 @@ and installs to /Applications. `make test`, `make bench`. Details for the mainta
 (architecture, measurements, rules) are in [AGENTS.md](AGENTS.md).
 
 Data lives in `~/Library/Application Support/Fred/` (learning log, clipboard log, images).
+
+MIT licensed (see [LICENSE](LICENSE)). A personal project: no support, issues or roadmap.

@@ -236,6 +236,13 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
 
 ## Testing etiquette on the user's Mac
 
+- The repo is public. Never commit the user's real data — contact names, bookmarks,
+  clipboard text, learning history, query logs — in tests, docs, benchmarks or commit
+  messages, even when debugging a real-world ranking complaint: reproduce it with
+  fictional names.
+  Push only `main`; other refs in this clone (e.g. `refs/codex/…` checkpoints) are
+  local tool state.
+
 - Never execute Sleep/Restart/Shut Down/Lock/Empty Trash/Force Quit for testing — use
   `fredctl dryrun on` or launch with `FRED_DRY_RUN=1`.
 - Don't pollute clipboard history; remove test clips with `fredctl clip forget <q>`.
