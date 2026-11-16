@@ -6,8 +6,9 @@
 # N); CFBundleVersion is N, FredRevision the short git hash. FRED_VERSION overrides.
 #
 # Signing identity, FRED_SIGN_IDENTITY:
-#   unset  the local self-signed "Fred Local Signing" (keychain from setup-signing.sh),
-#          which keeps the designated requirement, and so the privacy grants, stable
+#   unset  the Developer ID from Fred's own keychain (setup-signing.sh), no timestamp:
+#          the same designated requirement as releases, so privacy grants carry across
+#          brew-installed releases and local builds
 #   "-"    ad-hoc: CI checks that build and verify the bundle but never install it
 #   other  that identity from the keychain search list, with a secure timestamp
 #          (Developer ID releases; notarization requires the timestamp)
@@ -48,7 +49,9 @@ case "${FRED_SIGN_IDENTITY:-}" in
   "")
     /usr/libexec/PlistBuddy -c "Add :FredDevTools bool true" "$PLIST"
     security unlock-keychain -p "$(cat "$PASS_FILE")" "$KC"
-    "${sign[@]}" --sign "Fred Local Signing" --keychain "$KC" "$OUT" ;;
+    id="$(security find-identity -v -p codesigning "$KC" | awk '/"Developer ID Application: / { print $2; exit }')"
+    [[ -n "$id" ]] || { echo "no Developer ID identity for local builds: run scripts/setup-signing.sh" >&2; exit 1; }
+    "${sign[@]}" --timestamp=none --sign "$id" --keychain "$KC" "$OUT" ;;
   -)
     "${sign[@]}" --sign - "$OUT" ;;
   *)

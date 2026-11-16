@@ -17,7 +17,7 @@ ok()  { pass=$((pass + 1)); }
 bad() { echo "FAIL: $*"; fail=$((fail + 1)); }
 
 SOCK="$HOME/Library/Application Support/Fred/control.sock"
-if [[ ! -S "$SOCK" ]] || ! $CTL stats >/dev/null 2>&1; then echo "smoke: Fred isn't running (make install)"; exit 1; fi
+if [[ ! -S "$SOCK" ]] || ! $CTL stats >/dev/null 2>&1; then echo "smoke: no control socket: Fred isn't running, or it's a brew release (make install)"; exit 1; fi
 
 # Grants, hotkeys, login item.
 missing=$($CTL permissions | grep -v ": granted$")
