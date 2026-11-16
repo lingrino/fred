@@ -190,8 +190,11 @@ final class ControlServer: @unchecked Sendable {
         case "settings":   // `settings` shows the window (takes focus); `settings <png>` renders offscreen
             if arg.isEmpty { app.settings.show(); return "ok" }
             return app.settings.snapshot(to: arg)
-        case "glassbench":
-            return GlassBench.run()
+        case "hotkeybench":   // on screen, takes focus: user idle only (see LiveTests)
+            guard let n = Int(arg) else { return LiveTests.result }
+            return LiveTests.hotkeyBench(l, cycles: max(1, min(n, 200)))
+        case "live":
+            return arg == "run" ? LiveTests.live(l, settings: app.settings) : LiveTests.result
         case "shadow":
             l.panel.hasShadow = arg != "off"; return "shadow \(l.panel.hasShadow)"
         case "dryrun": Actions.dryRun = arg != "off"; return "dryrun \(Actions.dryRun)"

@@ -8,37 +8,32 @@ import AppKit
 /// Built once at launch and kept alive; showing is just `orderFront`.
 @MainActor
 class FloatingPanel: NSPanel {
-    /// UI lives here, above the glass (not inside it) so swapping glass views never
-    /// touches it.
+    /// UI lives here, above the backdrop (not inside it), so backdrop changes never touch it.
     let content = FlippedView()
     var onResignKey: (() -> Void)?
     /// Sees ⌘-key equivalents first (⌘1…⌘9, ⌘↩, ⌘O…). Return true if handled.
     var keyHandler: ((NSEvent) -> Bool)?
 
-    /// The window never changes size: it is `maxHeight` tall and transparent.
-    /// Height changes swap between pre-built glass views, one per possible height.
-    ///
-    /// Measured: resizing a window costs 1.3–2.6 ms (new backing store, window-server
-    /// round trip); resizing an NSGlassEffectView costs ~1.1 ms of CPU in
-    /// displayIfNeeded (it re-renders its shape). Toggling `isHidden` on an already-built
-    /// glass view costs neither.
+    /// The window never changes size (resizing a window costs 1.3–2.6 ms: new backing
+    /// store, window-server round trip): it is `maxHeight` tall and transparent, and only
+    /// the backdrop's visible height changes.
     let maxHeight: CGFloat
     private let root = FlippedView()
-    private var glasses: [(height: CGFloat, view: NSView)] = []
-    private var singleResizable = false
-    /// "glass" mode: one full-height glass view, clipped by this mask; resizing = moving
-    /// the mask edge (no glass re-render).
+    private var backdropView: NSView!
+    /// Glass: the rounded mask that decides how much of the full-height glass shows.
     private var glassMask: CALayer?
-    private var current: NSView?
-    /// Backdrop A/B (`defaults write dev.fred.Fred debugBackdrop <name>`): "vibrancy"
-    /// (NSVisualEffectView, state pinned active), "glass" (one full-height
-    /// NSGlassEffectView clipped by a resizable mask), "multiglass" (one glass view per
-    /// height), "oneglass", "plain".
-    ///
-    /// Why not Liquid Glass by default: measured on this Mac, NSGlassEffectView re-renders
-    /// on every key-state change (~10 ms in displayIfNeeded each time the panel shows) and
-    /// ~1 ms per resize. Vibrancy: hotkey→committed 2.2 ms vs 13 ms with glass.
-    static let backdrop = UserDefaults.standard.string(forKey: "debugBackdrop") ?? "vibrancy"
+
+    /// Backdrop, decided by an on-screen A/B on 2026-11-15 (`fredctl hotkeybench`, p50 of
+    /// 30 real ⌘Space shows each): Liquid Glass — one full-height NSGlassEffectView that
+    /// is never resized (resizing re-renders it, ~1 ms), clipped by a mask layer whose
+    /// height moves instead. Show 5.3–6.4 ms vs 3.4–3.6 ms with vibrancy over five runs
+    /// (the glass re-renders on the key-state change: commit ~3 vs 0.7 ms); keystrokes
+    /// cost the same (~2 ms incl. OS delivery). Both are under one 120 Hz frame.
+    /// The user prefers glass at that price. Fallback, no rebuild needed:
+    /// `defaults write dev.fred.Fred debugBackdrop vibrancy` (NSVisualEffectView, state
+    /// pinned active so focus changes don't re-render it, resized directly).
+    static let vibrancy = UserDefaults.standard.string(forKey: "debugBackdrop") == "vibrancy"
+    static var backdrop: String { vibrancy ? "vibrancy" : "glass" }
 
     init(width: CGFloat, heights: [CGFloat]) {
         maxHeight = heights.max() ?? 64
@@ -59,10 +54,16 @@ class FloatingPanel: NSPanel {
 
         root.frame = NSRect(x: 0, y: 0, width: width, height: maxHeight)
         root.wantsLayer = true
-        // Glass re-renders when resized, so it gets one pre-built view per height.
-        // Vibrancy resizes cheaply: one view, resized.
-        singleResizable = Self.backdrop == "vibrancy" || Self.backdrop == "plain"
-        if Self.backdrop == "glass" {
+        if Self.vibrancy {
+            let v = NSVisualEffectView(frame: root.bounds)
+            v.material = .popover
+            v.blendingMode = .behindWindow
+            v.state = .active
+            v.wantsLayer = true
+            v.layer?.cornerRadius = Theme.cornerRadius
+            v.layer?.masksToBounds = true
+            backdropView = v
+        } else {
             let container = FlippedView(frame: root.bounds)
             container.wantsLayer = true
             let ge = NSGlassEffectView(frame: container.bounds)
@@ -74,39 +75,9 @@ class FloatingPanel: NSPanel {
             m.cornerRadius = Theme.cornerRadius
             container.layer!.mask = m
             glassMask = m
-            root.addSubview(container)
-            glasses.append((maxHeight, container))
-            current = container
+            backdropView = container
         }
-        let hs = Self.backdrop == "glass" ? [] : Self.backdrop == "oneglass" || singleResizable
-            ? [heights.max() ?? 64] : Array(Set(heights)).sorted()
-        for h in hs {
-            let frame = NSRect(x: 0, y: 0, width: width, height: h)
-            let g: NSView
-            if Self.backdrop == "plain" {
-                g = NSView(frame: frame)
-                g.wantsLayer = true
-                g.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-                g.layer?.cornerRadius = Theme.cornerRadius
-            } else if Self.backdrop == "vibrancy" {
-                let v = NSVisualEffectView(frame: frame)
-                v.material = .popover
-                v.blendingMode = .behindWindow
-                v.state = .active          // same look key or not: no re-render on focus change
-                v.wantsLayer = true
-                v.layer?.cornerRadius = Theme.cornerRadius
-                v.layer?.masksToBounds = true
-                g = v
-            } else {
-                let ge = NSGlassEffectView(frame: frame)
-                ge.style = .regular
-                ge.cornerRadius = Theme.cornerRadius
-                g = ge
-            }
-            g.isHidden = true
-            root.addSubview(g)
-            glasses.append((h, g))
-        }
+        root.addSubview(backdropView)
         content.frame = root.bounds
         content.wantsLayer = true
         root.addSubview(content)
@@ -159,7 +130,7 @@ class FloatingPanel: NSPanel {
     // MARK: Showing without re-rendering the glass
     //
     // Ordering a window out discards its rendered state; on the next order-in, the
-    // NSGlassEffectViews rebuild — measured ~10 ms on the show path. So the panel is
+    // NSGlassEffectView rebuilds — measured ~10 ms on the show path. So the panel is
     // only ordered out for an instant on hide (that is what hands keyboard focus back to
     // the previous app), then ordered straight back in invisible and click-through.
     // Showing is then just: alpha 1, accept mouse, become key.
@@ -195,40 +166,25 @@ class FloatingPanel: NSPanel {
         setHeight(height)
     }
 
-    var glassHeight: CGFloat { glassMask?.frame.height ?? current?.frame.height ?? 0 }
+    /// Visible height of the backdrop (the panel's apparent height).
+    var glassHeight: CGFloat { glassMask?.frame.height ?? backdropView.frame.height }
 
-    /// Shows the glass whose height is the smallest one ≥ `h`.
     func setHeight(_ h: CGFloat) {
+        let h = min(h, maxHeight)
         if let m = glassMask {
-            let h = min(h, maxHeight)
             guard abs(m.frame.height - h) > 0.5 else { return }
             m.frame = CGRect(x: 0, y: 0, width: frame.width, height: h)
-            invalidateShadow()
-            return
+        } else {
+            guard abs(backdropView.frame.height - h) > 0.5 else { return }
+            backdropView.frame = NSRect(x: 0, y: 0, width: frame.width, height: h)
         }
-        if singleResizable, let g = glasses.first?.view {
-            if current !== g { g.isHidden = false; current = g }
-            guard abs(g.frame.height - h) > 0.5 else { return }
-            g.frame = NSRect(x: 0, y: 0, width: frame.width, height: min(h, maxHeight))
-            invalidateShadow()
-            return
-        }
-        guard let g = (glasses.first { $0.height >= h - 0.5 } ?? glasses.last)?.view, g !== current else { return }
-        g.isHidden = false
-        current?.isHidden = true
-        current = g
         invalidateShadow()
     }
 
-    /// Pays each glass view's first-render cost once (call while ordered in, invisible).
-    func warmGlasses() {
-        for (_, g) in glasses {
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            current?.isHidden = true; g.isHidden = false; current = g
-            CATransaction.commit()
-            displayIfNeeded()
-            CATransaction.flush()
-        }
+    /// Pays the backdrop's first-render cost at launch (call while ordered in, invisible).
+    func warmBackdrop() {
+        displayIfNeeded()
+        CATransaction.flush()
     }
 }
 

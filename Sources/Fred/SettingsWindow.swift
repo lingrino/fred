@@ -35,6 +35,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let statusKeys = ["Hotkeys", "Login item", "Index", "Clipboard", "Uptime",
                              "CPU", "Memory", "Keystroke → frame", "⌘Space → frame", "Search + rows"]
 
+    var isOpen: Bool { window?.isVisible ?? false }
+    func close() { window?.close() }
+
     func show() {
         if window == nil { build() }
         Permissions.refreshAutomation(ask: false)

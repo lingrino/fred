@@ -15,7 +15,8 @@ To pick it up again:
 3. `make check` (zero-warning build, unit tests, live smoke test against the installed
    app; no focus stealing). Fix what it reports before new work.
 4. `make bench`: compares with `Benchmarks/baseline.tsv`, flags ≥20% & ≥0.5 µs slower
-   (rerun once; medians wobble). `fredctl stats` shows the user's real latency.
+   (rerun once; medians wobble). `fredctl stats` shows the user's real latency. When the
+   user is idle: `fredctl live run` and `fredctl hotkeybench 30` (on-screen checks).
 5. Work → test of the right kind (see "Testing") → `make check` → `make install` → commit.
    If a benchmark moves on purpose, `make bench-save` and say why in the commit.
 
@@ -127,7 +128,7 @@ Sources/Fred/              the app
   Indexer.swift            background reindex (sources in parallel) on FSEvents / Contacts change / wake
   IconAtlas.swift          all icons pre-rendered (parallel) into one bitmap; rows use sub-images
   TitleAtlas.swift         all catalog titles pre-rendered as A8 masks (rows = mask + color layer)
-  UI/Panel.swift           FloatingPanel: fixed-size non-activating window, backdrop (vibrancy),
+  UI/Panel.swift           FloatingPanel: fixed-size non-activating window, backdrop (masked glass),
                            present()/park() instead of order in/out; Theme constants; DevMode
   UI/QueryField.swift      custom single-line text input (fast path + NSTextInputClient for IME)
   UI/ResultList.swift      ResultList (NSView host) + RowLayer (pure CALayer row)
@@ -136,7 +137,8 @@ Sources/Fred/              the app
   ClipboardController.swift pasteboard polling, clipboard panel + preview, paste
   Actions.swift            open, system commands (loginwindow AEs, lock, Finder), ⌘V posting
   SettingsWindow.swift     "Fred Settings" health window (AppKit, plain NSWindow)
-  ContactsSource / ContactCard / Permissions / LoginItem / HotKeys / ControlServer / GlassBench / Log
+  LiveTests.swift          on-screen checks via posted key events: hotkeybench, typing, ⌘, (user idle only)
+  ContactsSource / ContactCard / Permissions / LoginItem / HotKeys / ControlServer / Log
 Sources/FredBench/         `fredbench scan` (what sources find), `bench`, `save` (baseline)
 Benchmarks/baseline.tsv    p50 per benchmark (ns), compared by `make bench`
 scripts/                   swift.sh (toolchain wrapper), bundle.sh, setup-signing.sh, fredctl,
@@ -216,8 +218,12 @@ focus; with a path: render it offscreen),
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
 (visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
 `learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`,
-`animcheck <q1>|<q2>` (implicit animations on layers; alpha-0 panel, no focus),
-`glassbench` (backdrop variants' show/resize cost; takes key focus — run when idle).
+`animcheck <q1>|<q2>` (implicit animations on layers; alpha-0 panel, no focus).
+On screen, **user idle only** (Fred posts real key events into its own panel; aborts if
+the panel isn't key, so nothing reaches another app): `hotkeybench <n>` (n × ⌘Space →
+type → hide; real show/keystroke latency per stage; result: `hotkeybench` again) and
+`live run` (contact typing path with Unicode, ⌘, → Fred Settings, focus return; result:
+`live`). Posted events reset HIDIdleTime: wait ~30 s and re-check idle between runs.
 
 Interactive testing with computer use: `make dev` (Dock icon + Fred activates on show,
 because the automation tool only types into the frontmost app). Check the user is away
@@ -244,7 +250,7 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
   macOS 27 app-data protection (user grant).
 - Clipboard: `NSPasteboard.accessBehavior` ("Paste from Other Apps"); paste/typing via
   CGEvent (`CGPreflightPostEventAccess`). Hotkeys: Carbon `RegisterEventHotKey`.
-- Liquid Glass / `NSGlassEffectView` cost (re-measure with `glassbench` when idle).
+- Liquid Glass / `NSGlassEffectView` cost (re-measure with `fredctl hotkeybench 30` when idle).
 - Toolchain: the CLT stale-interface workaround (`scripts/swift.sh`), the testing plugin
   path (Makefile), new compiler diagnostics (`make lint`). Signing keychain + password in
   `~/Library/Application Support/FredDev/` — losing it means a new identity, and the user
@@ -252,12 +258,7 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 
 ## Open decisions
 
-- Backdrop: the user prefers Liquid Glass "but not for 10 ms". The masked single-glass
-  variant (`defaults write dev.fred.Fred debugBackdrop glass`, set on the user's Mac since
-  2026-11-15) measured offscreen: show 1.0 ms / resize 0.04 ms vs vibrancy 0.18 / 0.09
-  (multi-glass 1.6/0.08, resized glass 0.9/1.1). Still to do: read real `hotkey→committed`
-  from `fredctl stats` after some days of use, then make the winner `Panel.backdrop`'s
-  default and delete the losing variants + `GlassBench` (they are experiment code).
+None. (Resolved 2026-11-15: backdrop = masked Liquid Glass; numbers in "Latency notes".)
 
 ## Latency notes (measured 2026-11-14, M4 Max, macOS 27.2; `fredctl stats`)
 
@@ -279,9 +280,13 @@ What was measured and why the code looks the way it does — don't regress these
   (~200 µs) → never use them in hot paths; layers are `CALayer.still()`.
 - Resizing a window: 1.3–2.6 ms → the window is fixed at max height; only the backdrop view
   resizes.
-- NSGlassEffectView (Liquid Glass): ~10 ms re-render every show (key-state change) and
-  ~1 ms per resize → default backdrop is NSVisualEffectView (state pinned active).
-  `defaults write dev.fred.Fred debugBackdrop glass` to A/B.
+- Liquid Glass (NSGlassEffectView) re-renders on resize (~1 ms) and on every key-state
+  change → one full-height glass view, never resized, clipped by a mask layer; panels are
+  parked, not ordered out. On-screen A/B 2026-11-15 (`hotkeybench 30`, p50, five runs):
+  ⌘Space→frame glass 5.3–6.4 ms vs vibrancy 3.4–3.6 ms (commit ~3 vs 0.7 ms); keystroke→
+  frame ~2 ms both. The user prefers glass at +2–2.5 ms (both < one 120 Hz frame); the
+  earlier "~10 ms" no longer reproduces. Fallback: `defaults write dev.fred.Fred
+  debugBackdrop vibrancy`.
 - Ordering a window out discards its rendered state → panels are "parked" (ordered in,
   alpha 0, click-through, `canBecomeKey == false`) instead of ordered out.
 - Row text rasterized per keystroke ~150 µs → `TitleAtlas` (all titles pre-rendered as A8

@@ -118,13 +118,13 @@ final class Launcher: NSObject, QueryFieldDelegate {
     }
 
     /// Pays first-use costs (glass, fonts, Core Text, code paging) once at launch with an
-    /// invisible, non-key show, so the first real ⌥Space is as fast as the hundredth.
+    /// invisible, non-key show, so the first real ⌘Space is as fast as the hundredth.
     func warmUp() {
         guard !panel.shown else { return }
         panel.alphaValue = 0
         panel.position(height: panel.maxHeight)
         panel.orderFrontRegardless()
-        panel.warmGlasses()
+        panel.warmBackdrop()
         for q in ["a", "ch", "sys set", "2+2"] {
             field.text = q
             queryChanged()
