@@ -1,5 +1,5 @@
 // Generates Resources/AppIcon.icns. Run: swift scripts/make-icon.swift
-// A squircle with a deep indigo→violet gradient and a white magnifier (SF Symbol).
+// A squircle with a burnt orange gradient (deep rust → amber-orange) and a white magnifier (SF Symbol).
 import AppKit
 
 func render(_ px: Int) -> Data {
@@ -13,8 +13,8 @@ func render(_ px: Int) -> Data {
     let inset = s * 100 / 1024
     let body = NSRect(x: inset, y: inset, width: s - 2 * inset, height: s - 2 * inset)
     let path = NSBezierPath(roundedRect: body, xRadius: s * 185 / 1024, yRadius: s * 185 / 1024)
-    NSGradient(colors: [NSColor(srgbRed: 0.20, green: 0.16, blue: 0.55, alpha: 1),
-                        NSColor(srgbRed: 0.52, green: 0.28, blue: 0.86, alpha: 1)])!.draw(in: path, angle: 70)
+    NSGradient(colors: [NSColor(srgbRed: 0.55, green: 0.19, blue: 0.04, alpha: 1),
+                        NSColor(srgbRed: 0.88, green: 0.45, blue: 0.12, alpha: 1)])!.draw(in: path, angle: 70)
     let cfg = NSImage.SymbolConfiguration(pointSize: s * 0.42, weight: .bold)
         .applying(.init(paletteColors: [.white]))
     let sym = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)!.withSymbolConfiguration(cfg)!
