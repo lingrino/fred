@@ -93,7 +93,9 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   pushes) and its `lint`, `test` and `scripts` jobs: `make lint`; `make test` plus a
   release dry run (ad-hoc signed) and `brew style` on the generated cask; shellcheck and
   actionlint. Runner label `xcode-27`: GitHub's macOS 27 arm64 image (images are named
-  by Xcode major). `make smoke` and the on-screen checks need the installed app and its
+  by Xcode major). Its default Xcode lags (27.1 with the 27.0 SDK, which refuses the 27.2
+  deployment target), so both workflows set `DEVELOPER_DIR` to the Xcode this Mac uses
+  (27.2). `make smoke` and the on-screen checks need the installed app and its
   grants, so they stay local: `make check` before opening a PR.
 - `review`: Claude reviews each PR (anthropics/claude-code-action).
 - `release`, on every push to main: version 0.0.N, N = commits on main (squash merges, so
@@ -312,7 +314,8 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 - Liquid Glass / `NSGlassEffectView` cost (re-measure with `fredctl hotkeybench 30` when idle).
 - Toolchain: the CLT workarounds (`scripts/swift.sh`, only when the CLT is active), new
   compiler diagnostics (`make lint`), the CI runner label (`xcode-27`: move to the next
-  Xcode major's label when GitHub ships it). Signing keychain + password in
+  Xcode major's label when GitHub ships it) and the workflows' `DEVELOPER_DIR` (keep it on
+  the local Xcode; the image's readme lists what's installed). Signing keychain + password in
   `~/Library/Application Support/FredDev/` — losing it means a new identity, and the user
   must re-grant every permission (one-way door: ask first).
 
