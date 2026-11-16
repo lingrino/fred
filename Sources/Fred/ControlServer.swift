@@ -5,9 +5,13 @@ import FredCore
 ///
 /// Lets the maintainer (Claude) inspect the running app with its real data and real
 /// permissions: run queries, read latency stats, check grants, drive the UI for
-/// screenshots. Unix socket, mode 0600, one line in → text out. Nothing here performs a
-/// pick or an action on the user's behalf except `dryrun`-guarded testing hooks.
+/// screenshots. Unix socket, mode 0600, one line in → text out.
+///
+/// It is a deputy for Fred's privacy grants (contacts, clipboard history, posting ⌘V via
+/// `clip pick`), so it only exists in locally built apps: `scripts/bundle.sh` sets
+/// FredDevTools in their Info.plist, released builds never have it.
 final class ControlServer: @unchecked Sendable {
+    static let enabled = Bundle.main.object(forInfoDictionaryKey: "FredDevTools") as? Bool == true
     let path = Engine.dataDirPath + "/control.sock"
     private weak var app: AppDelegate?
 
@@ -33,7 +37,14 @@ final class ControlServer: @unchecked Sendable {
         let t = Thread { [self] in
             while true {
                 let c = accept(fd, nil, nil)
-                if c < 0 { continue }
+                if c < 0 { usleep(100_000); continue }   // e.g. out of fds: don't spin
+                // A client that gives up before the reply (fredctl killed on a timeout)
+                // must not take Fred down with SIGPIPE; a client that never sends a full
+                // line must not hold the thread forever.
+                var one: Int32 = 1
+                setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+                var tv = timeval(tv_sec: 5, tv_usec: 0)
+                setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
                 self.serve(c)
             }
         }
@@ -45,7 +56,7 @@ final class ControlServer: @unchecked Sendable {
         defer { close(c) }
         var buf = [UInt8](repeating: 0, count: 4096)
         var data: [UInt8] = []
-        while !data.contains(0x0A) {
+        while !data.contains(0x0A) && data.count < 64 << 10 {
             let n = read(c, &buf, buf.count)
             if n <= 0 { break }
             data += buf[0..<n]
@@ -69,7 +80,7 @@ final class ControlServer: @unchecked Sendable {
             for k in c.kinds { kinds[Int(k.rawValue)] += 1 }
             return """
             catalog: \(c.count) items (apps \(kinds[0]), settings \(kinds[1]), commands \(kinds[2]), bookmarks \(kinds[3]), contacts \(kinds[4])), \(c.index.count) entries, \(c.index.byteCount) text bytes
-            atlas: \(e.atlas.map { "\($0.slots) icons" } ?? "not ready")
+            atlas: \(e.atlas.map { "\($0.slots) icons" } ?? "not ready"); titles: \(e.titles.map { "\($0.count - $0.missing) of \($0.count), \($0.width)x\($0.height)" } ?? "not ready")
             \(l.searchLatency.summary)
             \(l.keystrokeLatency.summary)
             \(l.stOS.summary)
@@ -140,29 +151,20 @@ final class ControlServer: @unchecked Sendable {
             // user is working.
             let bits = arg.split(separator: " ", maxSplits: 1).map(String.init)
             guard let out = bits.first else { return "usage: snapshot <path.png> [query]" }
-            let wasVisible = l.isVisible
-            if !wasVisible {
-                // Ordered in invisibly and without becoming key: layers get drawn, the
-                // user's focus is untouched.
-                l.panel.alphaValue = 0
-                l.panel.position(height: l.panel.glassHeight)
-                l.panel.orderFrontRegardless()
+            return Self.offscreen(l.panel) {
+                l.field.text = bits.count > 1 ? bits[1] : ""
+                l.queryChanged()
+                return Snapshot.write(view: l.panel.content, to: out)
             }
-            l.field.text = bits.count > 1 ? bits[1] : ""
-            l.queryChanged()
-            let r = Snapshot.write(view: l.panel.content, to: out)
-            if !wasVisible { l.panel.park() }
-            return r
         case "card":
             // card <png> <query>: show the first contact result's card offscreen.
             let bits = arg.split(separator: " ", maxSplits: 1).map(String.init)
             guard bits.count == 2 else { return "usage: card <png> <query>" }
-            l.panel.alphaValue = 0; l.panel.position(height: l.panel.glassHeight); l.panel.orderFrontRegardless()
-            l.field.text = bits[1]
-            l.queryChanged()
-            let r = l.openFirstContact() ? Snapshot.write(view: l.panel.content, to: bits[0]) : "no contact result"
-            l.panel.park()
-            return r
+            return Self.offscreen(l.panel) {
+                l.field.text = bits[1]
+                l.queryChanged()
+                return l.openFirstContact() ? Snapshot.write(view: l.panel.content, to: bits[0]) : "no contact result"
+            }
         case "learn": return e.learning.debugDescription(catalog: e.catalog)
         case "reindex": app.indexer.reloadAll(); return "ok"
         case "resetstats":
@@ -173,20 +175,19 @@ final class ControlServer: @unchecked Sendable {
             // report any Core Animation animations attached to the launcher's layers.
             let qs = arg.split(separator: "|").map(String.init)
             guard qs.count == 2 else { return "usage: animcheck <q1>|<q2>" }
-            let was = l.isVisible
-            if !was { l.panel.alphaValue = 0; l.panel.position(height: l.panel.glassHeight); l.panel.orderFrontRegardless() }
-            l.field.text = qs[0]; l.queryChanged(); l.commitNow()
-            l.field.text = qs[1]; l.queryChanged()
-            var found: [String] = []
-            func walk(_ layer: CALayer, _ path: String) {
-                for k in layer.animationKeys() ?? [] { found.append("\(path) [\(type(of: layer))] \(k)") }
-                if let m = layer.mask { walk(m, path + ".mask") }
-                for (i, c) in (layer.sublayers ?? []).enumerated() { walk(c, path + "/\(i)") }
+            return Self.offscreen(l.panel) {
+                l.field.text = qs[0]; l.queryChanged(); l.commitNow()
+                l.field.text = qs[1]; l.queryChanged()
+                var found: [String] = []
+                func walk(_ layer: CALayer, _ path: String) {
+                    for k in layer.animationKeys() ?? [] { found.append("\(path) [\(type(of: layer))] \(k)") }
+                    if let m = layer.mask { walk(m, path + ".mask") }
+                    for (i, c) in (layer.sublayers ?? []).enumerated() { walk(c, path + "/\(i)") }
+                }
+                if let root = l.panel.contentView?.layer { walk(root, "root") }
+                l.commitNow()
+                return found.isEmpty ? "no animations" : found.joined(separator: "\n")
             }
-            if let root = l.panel.contentView?.layer { walk(root, "root") }
-            l.commitNow()
-            if !was { l.panel.park() }
-            return found.isEmpty ? "no animations" : found.joined(separator: "\n")
         case "settings":   // `settings` shows the window (takes focus); `settings <png>` renders offscreen
             if arg.isEmpty { app.settings.show(); return "ok" }
             return app.settings.snapshot(to: arg)
@@ -200,8 +201,25 @@ final class ControlServer: @unchecked Sendable {
         case "dryrun": Actions.dryRun = arg != "off"; return "dryrun \(Actions.dryRun)"
         case "clip": return app.clipboard?.control(arg) ?? "clipboard: off"
         default:
-            return "commands: stats permissions request query <q> show hide type <q> key down|up|esc learn reindex dryrun on|off clip … settings [png] animcheck q1|q2"
+            return """
+            commands: stats resetstats permissions request query <q> show hide type <q> key down|up|esc
+              snapshot <png> [q] card <png> <q> animcheck <q1>|<q2> settings [png] learn reindex
+              dryrun on|off shadow on|off hotkeybench [n] live [run]
+              clip search <q>|forget <q>|show|pick <n>|snapshot <png> [q]
+            """
         }
+    }
+
+    /// Runs `body` with `panel` ordered in invisibly and never key, so layers are drawn and
+    /// the user's focus is untouched; refuses while the user has the panel on screen (it
+    /// would overwrite what they typed).
+    @MainActor static func offscreen(_ panel: FloatingPanel, height: CGFloat? = nil, _ body: () -> String) -> String {
+        guard !panel.shown else { return "busy: the panel is on screen" }
+        panel.alphaValue = 0
+        panel.position(height: height ?? panel.glassHeight)
+        panel.orderFrontRegardless()
+        defer { panel.park() }
+        return body()
     }
 
     private func residentMB() -> String {

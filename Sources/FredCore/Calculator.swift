@@ -7,14 +7,16 @@ import Foundation
 ///
 ///     expr    := term (('+' | '-') term)*
 ///     term    := factor (('*' | '/' | '%' | '×' | '÷' | 'x') factor | implicit-mul factor)*
-///     factor  := unary ('^' factor)?            -- right associative; also '**'
-///     unary   := ('-' | '+') unary | postfix
+///     factor  := ('-' | '+') factor | unary ('^' factor)?   -- -2^2 = -4; ^ right assoc; also '**'
+///     unary   := ('-' | '+') unary | postfix                 -- function arguments: sqrt -4
 ///     postfix := primary ('!')*
 ///     primary := number | constant | func '(' expr ')' | func primary | '(' expr ')'
 ///
-/// Accepts "1,000" (thousands separators are ignored).
-/// `%` is modulo. A query only counts as math when it parses completely AND contains an
-/// operator or function — a bare "42" or a word like "2fold" is not a calculation.
+/// Accepts "1,000" (thousands separators are ignored) and hex "0x1F" (a bare hex literal
+/// counts as a calculation: it converts). `%` is modulo. A query only counts as math when
+/// it parses completely AND contains an operator or function — a bare "42" or a word like
+/// "2fold" is not a calculation. A sum or difference that cancels to below 1e-12 of its
+/// operands is 0 (0.1+0.2-0.3 is 5.55e-17 in binary floating point).
 public enum Calculator {
     public struct Result: Equatable, Sendable {
         public let value: Double
@@ -110,14 +112,20 @@ private struct Parser {
         while true {
             skipSpace()
             let c = peek
-            if c == UInt8(ascii: "+") { i += 1; sawOperator = true; guard let r = parseTerm() else { return nil }; lhs += r }
-            else if c == UInt8(ascii: "-") { i += 1; sawOperator = true; guard let r = parseTerm() else { return nil }; lhs -= r }
+            if c == UInt8(ascii: "+") { i += 1; sawOperator = true; guard let r = parseTerm() else { return nil }; lhs = add(lhs, r) }
+            else if c == UInt8(ascii: "-") { i += 1; sawOperator = true; guard let r = parseTerm() else { return nil }; lhs = add(lhs, -r) }
             else if eat((0xE2, 0x88)) { // U+2212 MINUS SIGN is E2 88 92
                 guard peek == 0x92 else { return nil }
-                i += 1; sawOperator = true; guard let r = parseTerm() else { return nil }; lhs -= r
+                i += 1; sawOperator = true; guard let r = parseTerm() else { return nil }; lhs = add(lhs, -r)
             }
             else { return lhs }
         }
+    }
+
+    /// a + b, with cancellation noise snapped to 0.
+    func add(_ a: Double, _ b: Double) -> Double {
+        let s = a + b
+        return abs(s) < max(abs(a), abs(b)) * 1e-12 ? 0 : s
     }
 
     mutating func parseTerm() -> Double? {
@@ -158,7 +166,12 @@ private struct Parser {
 
     mutating func parseFactor() -> Double? {
         depth += 1; defer { depth -= 1 }
-        guard depth < 64, let base = parseUnary() else { return nil }
+        guard depth < 64 else { return nil }
+        skipSpace()
+        // Signs bind looser than ^: -2^2 is -(2^2).
+        if peek == UInt8(ascii: "-") { i += 1; guard let v = parseFactor() else { return nil }; return -v }
+        if peek == UInt8(ascii: "+") { i += 1; return parseFactor() }
+        guard let base = parseUnary() else { return nil }
         skipSpace()
         if peek == UInt8(ascii: "^") {
             i += 1; sawOperator = true
@@ -206,9 +219,22 @@ private struct Parser {
 
     func isLetter(_ c: UInt8) -> Bool { (c | 0x20) >= 0x61 && (c | 0x20) <= 0x7A }
 
-    /// Number with optional thousands separators ("1,000,000"), fraction and exponent.
-    /// The digits are copied into a small stack buffer and handed to strtod.
+    /// Number with optional thousands separators ("1,000,000"), fraction and exponent, or
+    /// a hex literal. The digits are copied into a small stack buffer and handed to strtod.
     mutating func parseNumber() -> Double? {
+        if peek == UInt8(ascii: "0"), i + 2 < b.count, b[i + 1] | 0x20 == UInt8(ascii: "x"), hexValue(b[i + 2]) != nil {
+            i += 2
+            var v: UInt64 = 0, n = 0
+            while i < b.count, let d = hexValue(b[i]) {
+                n += 1
+                guard n <= 16 else { return nil }
+                v = v << 4 | d
+                i += 1
+            }
+            sawNumber = true
+            sawOperator = true   // "0xff" alone is a conversion worth showing
+            return Double(v)
+        }
         return withUnsafeTemporaryAllocation(of: CChar.self, capacity: 64) { tmp -> Double? in
             var n = 0
             func put(_ c: UInt8) -> Bool { guard n < 63 else { return false }; tmp[n] = CChar(bitPattern: c); n += 1; return true }
@@ -240,6 +266,12 @@ private struct Parser {
             sawNumber = true
             return strtod(tmp.baseAddress!, nil)
         }
+    }
+
+    func hexValue(_ c: UInt8) -> UInt64? {
+        if c >= 0x30 && c <= 0x39 { return UInt64(c - 0x30) }
+        let l = c | 0x20
+        return l >= 0x61 && l <= 0x66 ? UInt64(l - 0x61 + 10) : nil
     }
 
     func isDigits(_ from: Int, _ n: Int) -> Bool {

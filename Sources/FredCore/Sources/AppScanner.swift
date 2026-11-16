@@ -39,6 +39,9 @@ public enum AppScanner {
         public var fileName: String      // file name without ".app"
         public var bundleName: String?   // CFBundleName
         public var bundleID: String?
+        /// Info.plist modification time: an in-place update (same path) changes it, so
+        /// the icon atlas knows to re-render that app's icon.
+        public var stamp: Int = 0
     }
 
     public static func scan() -> [App] {
@@ -94,8 +97,10 @@ public enum AppScanner {
         var name = (try? url.resourceValues(forKeys: [.localizedNameKey]).localizedName) ?? fileName
         if name.hasSuffix(".app") { name.removeLast(4) }
         let bundleName = info?["CFBundleName"] as? String
+        var st = stat()
+        let stamp = stat(resolved.appendingPathComponent("Contents/Info.plist").path, &st) == 0 ? st.st_mtimespec.tv_sec : 0
         return App(path: url.path, name: name, fileName: fileName,
-                   bundleName: bundleName, bundleID: info?["CFBundleIdentifier"] as? String)
+                   bundleName: bundleName, bundleID: info?["CFBundleIdentifier"] as? String, stamp: stamp)
     }
 
     public static func items(_ apps: [App]) -> [Catalog.Item] {

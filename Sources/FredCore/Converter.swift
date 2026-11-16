@@ -235,10 +235,10 @@ enum UnitConversion {
         .init(symbol: "Tbit", dim: .data, factor: 125_000_000_000, offset: 0, names: ["tbit", "tbits", "terabit", "terabits"], target: "TB"),
         // data rate; base = bit/s
         .init(symbol: "bps", dim: .dataRate, factor: 1, offset: 0, names: ["bps", "bit/s"], target: nil),
-        .init(symbol: "Kbps", dim: .dataRate, factor: 1e3, offset: 0, names: ["kbps", "kbit/s", "kb/s"], target: "KB/s"),
+        .init(symbol: "Kbps", dim: .dataRate, factor: 1e3, offset: 0, names: ["kbps", "kbit/s"], target: "KB/s"),
         .init(symbol: "Mbps", dim: .dataRate, factor: 1e6, offset: 0, names: ["mbps", "mbit/s"], target: "MB/s"),
         .init(symbol: "Gbps", dim: .dataRate, factor: 1e9, offset: 0, names: ["gbps", "gbit/s"], target: "MB/s"),
-        .init(symbol: "KB/s", dim: .dataRate, factor: 8e3, offset: 0, names: ["kbytes/s"], target: "Kbps"),
+        .init(symbol: "KB/s", dim: .dataRate, factor: 8e3, offset: 0, names: ["kb/s", "kbytes/s"], target: "Kbps"),
         .init(symbol: "MB/s", dim: .dataRate, factor: 8e6, offset: 0, names: ["mb/s", "mbytes/s", "mbps bytes"], target: "Mbps"),
         .init(symbol: "GB/s", dim: .dataRate, factor: 8e9, offset: 0, names: ["gb/s"], target: "Gbps"),
         .init(symbol: "MiB/s", dim: .dataRate, factor: 8_388_608, offset: 0, names: ["mib/s"], target: "Mbps"),
@@ -281,8 +281,12 @@ enum UnitConversion {
     static func evaluate(_ t: Text) -> InstantAnswer? {
         let left: Text, right: Text?
         if let (l, r) = Converter.split(t) { left = l; right = r } else { left = t; right = nil }
-        guard let (v, from) = quantity(left) else { return nil }
+        guard let (v, from, at) = quantity(left) else { return nil }
         let src = table[from]
+        // "4k", "3d", "2m": a number glued to a one-letter unit is more often the start of
+        // a search ("4K…", "3D…") than a conversion. "3 d" and "2m in ft" still convert,
+        // and so do "72F" / "20c".
+        if right == nil, left.count - at == 1, isDigit(left.l[at - 1]), src.symbol != "°F", src.symbol != "°C" { return nil }
         var to: Int
         if let r = right {
             guard let u = unit(r) else { return nil }
@@ -315,7 +319,7 @@ enum UnitConversion {
     /// "5km", "5 km", "1,000 ft", "2*1024 MiB", "-40 °F". The unit starts where a
     /// number-ish run ends and something else begins; the leftmost such point that
     /// parses wins (= the longest unit suffix).
-    static func quantity(_ t: Text) -> (Double, Int)? {
+    static func quantity(_ t: Text) -> (value: Double, unit: Int, unitStart: Int)? {
         let c = t.l
         guard c.count >= 2 else { return nil }
         for i in 1..<c.count {
@@ -323,7 +327,7 @@ enum UnitConversion {
             guard isDigit(p) || p == 0x20 || p == 0x29 || p == 0x2E else { continue }       // digit ␠ ) .
             guard !(isDigit(x) || x == 0x20 || x == 0x2E || x == 0x2C || numberSymbols.contains(x)) else { continue }
             guard let u = unit(t[i..<c.count]), let v = number(t[0..<i]) else { continue }
-            return (v, u)
+            return (v, u, i)
         }
         return nil
     }
@@ -332,10 +336,29 @@ enum UnitConversion {
 
     static func number(_ t: Text) -> Double? {
         guard !t.isEmpty else { return nil }
-        let plain = t.b.contains(0x2C) ? String(decoding: t.b.filter { $0 != 0x2C }, as: UTF8.self) : t.string
-        if let v = Double(plain) { return v }
-        if plain.hasPrefix("+"), let v = Double(plain.dropFirst()) { return v }
+        // Commas only as thousands separators: "1,5" is not 15.
+        let plain: String? = !t.b.contains(0x2C) ? t.string
+            : grouped(t.b) ? String(decoding: t.b.filter { $0 != 0x2C }, as: UTF8.self) : nil
+        if let plain {
+            if let v = Double(plain) { return v }
+            if plain.hasPrefix("+"), let v = Double(plain.dropFirst()) { return v }
+        }
         return Calculator.evaluate(t.string)?.value
+    }
+
+    /// "1,000,000.5", "-12,345": commas only between groups of exactly three digits.
+    static func grouped(_ b: [UInt8]) -> Bool {
+        var i = 0, run = 0, sawComma = false
+        if i < b.count && (b[i] == 0x2D || b[i] == 0x2B) { i += 1 }   // - +
+        while i < b.count && b[i] != 0x2E {                          // up to "."
+            if isDigit(b[i]) { run += 1 }
+            else if b[i] == 0x2C {
+                if run == 0 || run > 3 || (sawComma && run != 3) { return false }
+                sawComma = true; run = 0
+            } else { return false }
+            i += 1
+        }
+        return !sawComma || run == 3
     }
 
     /// The largest duration unit (s…yr) in which the value is ≥ 1.

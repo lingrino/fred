@@ -38,6 +38,10 @@ fi
 ditto -c -k --keepParent "$OUT/Fred.app" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
 
+# No `uninstall quit:`: brew runs uninstall stanzas on every upgrade too, and nothing
+# would start Fred again afterwards. Fred restarts itself when its bundle is replaced
+# (AppDelegate.selfChanged), so upgrades just work; `brew uninstall` leaves a running Fred
+# until it is quit ("Quit Fred"). The macOS minimum is LSMinimumSystemVersion's job.
 cat > "$OUT/fred.rb" <<EOF
 cask "fred" do
   version "$VERSION"

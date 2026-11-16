@@ -11,7 +11,7 @@ import AppKit
 ///   contacts      Contacts                         prompt (Allow)
 ///   postEvents    "Device Control and Data Access" toggle (formerly Accessibility); paste ⌘V
 ///   pasteboard    Paste from Other Apps            set to Allow (clipboard history reads)
-///   chromeData    Files & Folders → Google Chrome  toggle (macOS 27 app-data protection)
+///   chromeData    Full Disk Access                 toggle (macOS 27 blocks Chrome's profile dir)
 ///   finder        Automation → Finder              prompt (Empty Trash)
 ///   loginwindow   Automation → loginwindow         prompt (Sleep, Restart, Shut Down)
 @MainActor
@@ -54,7 +54,7 @@ enum Permissions {
         }
         if status(.chromeData) != true {
             // A read attempt triggers the one-time "Data Access Blocked" notice and adds
-            // Fred to Files & Folders, where the user can enable it.
+            // Fred to Files & Folders; Full Disk Access also grants it (this Mac uses that).
             _ = try? Data(contentsOf: URL(fileURLWithPath: ChromeData.probePath))
         }
         refreshAutomation(ask: true)

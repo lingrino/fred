@@ -101,6 +101,89 @@ import Testing
         }
     }
 
+    /// `Searcher.search` without any pruning: every entry scored down to the fuzzy tier.
+    func exhaustive(_ s: Searcher, _ query: Matcher.Query, k: Int, learn: Learning, now: UInt32) -> TopK {
+        var top = TopK(k: k)
+        let m = query.count
+        guard m > 0 else { return top }
+        s.latch = -1
+        learn.applyBoosts(query: query.bytes, catalog: s.catalog, into: s, now: now)
+        defer {
+            for i in s.touched { s.sparse[Int(i)] = 0 }
+            s.touched.removeAll(keepingCapacity: true)
+        }
+        let idx = s.catalog.index
+        var best = Int32.min
+        let q0bit = Fold.charBit(query.bytes[0])
+        query.bytes.withUnsafeBufferPointer { qb in
+            query.compact.withUnsafeBufferPointer { cb in
+                for e in 0..<idx.count {
+                    if idx.masks[e] & query.mask != query.mask { continue }
+                    let initialHit = idx.initials[e] & q0bit != 0
+                    if !initialHit && m < 3 { continue }
+                    let sp = idx.spans[e]
+                    let n = Int(sp & 0xFF)
+                    if n < query.compact.count { continue }
+                    let packed = idx.items[e]
+                    let kind = Int(packed >> 24 & 0xF), item = Int(packed & 0xFF_FFFF), role = Int(packed >> 28)
+                    let learned = min(s.base[item] &+ s.sparse[item], Ranking.maxLearned)
+                    let raw = Matcher.score(query, qb.baseAddress!, cb.baseAddress!, idx.bytes + Int(sp >> 8), n, idx.starts[e],
+                                            allowLoose: kind != Int(Catalog.Kind.bookmark.rawValue), s.scratch,
+                                            lowest: .fuzzy, initialHit: initialHit)
+                    if raw < 0 { continue }
+                    let adj = Ranking.adjust(raw, kind: kind, role: role)
+                    var final = Ranking.blend(adj, raw: raw, learned: learned)
+                    best = max(best, final)
+                    if item == s.latch && raw >= Matcher.Tier.acronym.rawValue { final += Ranking.latchBonus }
+                    top.insert(item: Int32(item), score: final, tie: learned << 8 | Int32(255 - n), raw: adj)
+                }
+            }
+        }
+        top.dropWeak(below: best == .min ? .min : best - Ranking.relativeCutoff)
+        return top
+    }
+
+    @Test func pruningNeverChangesResults() {
+        // Branch and bound must be invisible: same rows, same order, same scores as
+        // scoring everything — with learning, latches, aliases and sub-settings.
+        var r = RNG(s: 6)
+        var items: [Catalog.Item] = []
+        for i in 0..<1500 {
+            let weak = r.int(4) == 0
+            items.append(.init(kind: weak ? .settings : Catalog.Kind.allCases[r.int(5)],
+                               title: randomString(&r, maxPieces: i % 60 == 0 ? 40 : 5),
+                               aliases: r.int(4) == 0 ? [randomString(&r, maxPieces: 3)] : [],
+                               secondary: r.int(4) == 0 ? [randomString(&r, maxPieces: 3)] : [],
+                               payload: "p\(i)", weak: weak,
+                               weakKeywords: r.int(3) == 0 ? [randomString(&r, maxPieces: 2)] : []))
+        }
+        let c = Catalog(items)
+        let s = Searcher(c)
+        let learn = Learning(logURL: nil)
+        var queries: [String] = []
+        for _ in 0..<60 { queries.append(randomString(&r, maxPieces: 2)) }
+        for i in 0..<600 {
+            // Repeated picks for a few queries, so some latch.
+            let q = queries[r.int(queries.count)]
+            learn.record(.init(time: 1_800_000_000 + UInt32(i), key: c.keys[r.int(40)], query: Fold.query(q), row: UInt8(r.int(5))))
+        }
+        learn.prepare(catalog: c, into: s, now: 1_800_001_000)
+        var latched = 0
+        for i in 0..<4000 {
+            let text = i % 3 == 0 ? queries[r.int(queries.count)] : randomString(&r, maxPieces: 1 + r.int(4))
+            let q = Matcher.Query(text)
+            let k = 1 + r.int(9)
+            let got = s.search(q, k: k, learn: learn, now: 1_800_001_000)
+            if s.latch >= 0 { latched += 1 }
+            let want = exhaustive(s, q, k: k, learn: learn, now: 1_800_001_000)
+            #expect(got.count == want.count, "\(text)")
+            for j in 0..<min(got.count, want.count) {
+                #expect(got.item(j) == want.item(j) && got.score(j) == want.score(j), "\(text) row \(j)")
+            }
+        }
+        #expect(latched > 0)   // the latch path was exercised
+    }
+
     @Test func calculatorNeverCrashes() {
         var r = RNG(s: 3)
         let chars = Array("0123456789+-*/^%()., xepisqrtlogabs!=×÷ ")
@@ -117,6 +200,7 @@ import Testing
         var r = RNG(s: 4)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fredfuzz-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
         var t: UInt32 = 1_800_000_000
         let s = ClipStore(dir: dir, now: t)
         for _ in 0..<2000 {
@@ -135,10 +219,19 @@ import Testing
         let disk = (0..<s2.count).map { (s2.text($0), s2.time[$0], s2.app($0)) }
         #expect(mem.count == disk.count)
         for (a, b) in zip(mem, disk) { #expect(a.0 == b.0 && a.1 == b.1 && a.2 == b.2) }
-        // Searching random queries never crashes and only returns matches.
+        // Search returns exactly the clips containing every token (naive reference),
+        // newest first.
+        func has(_ hay: ArraySlice<UInt8>, _ tok: [UInt8]) -> Bool {
+            guard tok.count <= hay.count else { return false }
+            let h = Array(hay)
+            for i in 0...(h.count - tok.count) where Array(h[i..<(i + tok.count)]) == tok { return true }
+            return false
+        }
         for _ in 0..<500 {
             let q = randomString(&r, maxPieces: 2)
-            for i in s2.search(q, limit: 50) { #expect(i >= 0 && i < s2.count) }
+            let tokens = Fold.query(q).split(separator: 0x20).map { Array($0) }
+            let want = (0..<s2.count).reversed().filter { i in tokens.allSatisfy { has(s2.foldArena[s2.foldSpan[i]], $0) } }
+            #expect(s2.search(q, limit: 100_000) == want, "\(q)")
         }
     }
 

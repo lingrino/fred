@@ -16,7 +16,8 @@ import Foundation
 ///     op 2 TOUCH:  (nothing more) — entry with `hash` becomes newest at `time`
 ///     op 3 DELETE: (nothing more)
 /// Images live next to the log as `images/<hash>.png`; their entry text is a label.
-/// The log is rewritten compactly at load when it has accumulated garbage.
+/// The log (and the in-memory arenas) are rewritten compactly when they have accumulated
+/// garbage: at load, and from the hourly prune.
 public final class ClipStore {
     public enum Kind: UInt8, Sendable { case text = 0, image = 1, files = 2 }
 
@@ -39,7 +40,8 @@ public final class ClipStore {
 
     public var count: Int { time.count }
     let dir: URL?
-    private var log: FileHandle?
+    private var logURL: URL?
+    private var log: AppendFile?
     private var garbageBytes = 0
 
     /// `dir` nil = in-memory (tests).
@@ -48,6 +50,8 @@ public final class ClipStore {
         guard let dir else { return }
         try? FileManager.default.createDirectory(at: imagesDir!, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("clipboard.log")
+        logURL = url
+        _ = AppendFile.claim(url, header: Self.magic)
         let before = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         let goodEnd = replay(url)
         let pruned = prune(now: now, persist: false)
@@ -58,11 +62,9 @@ public final class ClipStore {
             clean = rewrite(url)
         }
         if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: Data(Self.magic))
+            FileManager.default.createFile(atPath: url.path, contents: Data(Self.magic), attributes: [.posixPermissions: 0o600])
         }
-        log = try? FileHandle(forWritingTo: url)
-        if !clean && goodEnd >= 8 { try? log?.truncate(atOffset: UInt64(goodEnd)) }
-        _ = try? log?.seekToEnd()
+        log = AppendFile(url, validLength: !clean && goodEnd >= 8 ? goodEnd : nil)
     }
 
     static let magic: [UInt8] = Array("FRDC".utf8) + [1, 0, 0, 0]
@@ -74,11 +76,26 @@ public final class ClipStore {
 
     // MARK: Accessors
 
+    // Public accessors check `i`: FredCore builds with -Ounchecked, where an index that
+    // went stale under a caller would read arbitrary memory instead of trapping.
+
     public func text(_ i: Int) -> String {
-        String(decoding: textArena[textSpan[i]], as: UTF8.self)
+        guard i >= 0 && i < count else { return "" }
+        return String(decoding: textArena[textSpan[i]], as: UTF8.self)
     }
 
+    /// The first `n` bytes of the text (a cut multi-byte character becomes U+FFFD): for
+    /// row titles and previews, which must not cost O(clip size).
+    public func head(_ i: Int, bytes n: Int) -> String {
+        guard i >= 0 && i < count else { return "" }
+        let sp = textSpan[i]
+        return String(decoding: textArena[sp.lowerBound..<min(sp.upperBound, sp.lowerBound + n)], as: UTF8.self)
+    }
+
+    public func byteCount(_ i: Int) -> Int { i >= 0 && i < count ? textSpan[i].count : 0 }
+
     public func app(_ i: Int) -> String? {
+        guard i >= 0 && i < count else { return nil }
         let a = app[i]
         return a == 0 ? nil : apps[Int(a) - 1]
     }
@@ -102,12 +119,14 @@ public final class ClipStore {
     }
 
     public func touch(_ i: Int, time t: UInt32) {
+        guard i >= 0 && i < count else { return }
         let h = hash[i]
         moveToEnd(i, time: t)
         writeOp(2, time: t, hash: h)
     }
 
     public func delete(_ i: Int) {
+        guard i >= 0 && i < count else { return }
         let h = hash[i]
         if kind[i] == .image, let u = imageURL(h) { try? FileManager.default.removeItem(at: u) }
         remove(at: i)
@@ -118,8 +137,8 @@ public final class ClipStore {
     @discardableResult
     public func prune(now: UInt32, persist: Bool = true) -> Int {
         let cutoff = now > Self.retention ? now - Self.retention : 0
-        // Usually the oldest entries are first, but imports can append older clips, so
-        // scan everything (hourly, a few thousand entries).
+        // Usually the oldest entries are first, but a clock change can leave times out of
+        // order, so scan everything (hourly, a few thousand entries).
         var removed = 0
         var i = count - 1
         while i >= 0 {
@@ -131,7 +150,17 @@ public final class ClipStore {
             }
             i -= 1
         }
+        if persist { compactIfNeeded() }
         return removed
+    }
+
+    /// Deleted and pruned clips stay in the log and the arenas until a rewrite; Fred runs
+    /// for weeks, so don't wait for the next launch once there's a lot of it.
+    func compactIfNeeded() {
+        guard let url = logURL, garbageBytes > max(4 << 20, textArena.count / 2) else { return }
+        log = nil   // the rewrite replaces the file; appends must go to the new one
+        rewrite(url)
+        log = AppendFile(url)
     }
 
     // MARK: Search
@@ -148,6 +177,7 @@ public final class ClipStore {
             return out
         }
         let tokens = q.split(separator: 0x20).map { Array($0) }
+        let anchors = tokens.map(Self.rarestByte)
         let qmask = Fold.charMask(q)
         foldArena.withUnsafeBufferPointer { arena in
             let base = arena.baseAddress!
@@ -157,30 +187,46 @@ public final class ClipStore {
                 if mask[i] & qmask != qmask { continue }
                 let span = foldSpan[i]
                 var all = true
-                for tok in tokens where !contains(base + span.lowerBound, span.count, tok) { all = false; break }
+                for (t, tok) in tokens.enumerated() where !contains(base + span.lowerBound, span.count, tok, anchor: anchors[t]) {
+                    all = false; break
+                }
                 if all { out.append(i) }
             }
         }
         return out
     }
 
-    /// memchr for the first byte, then compare — libc memchr is NEON-vectorized.
+    /// memchr for the needle's rarest byte (`anchor`, its offset in the needle), then
+    /// compare — libc memchr is NEON-vectorized, and anchoring on "x" rather than the "e"
+    /// of "example" skips most false starts in English text.
     @inline(__always)
-    func contains(_ hay: UnsafePointer<UInt8>, _ n: Int, _ needle: [UInt8]) -> Bool {
+    func contains(_ hay: UnsafePointer<UInt8>, _ n: Int, _ needle: [UInt8], anchor a: Int) -> Bool {
         let m = needle.count
         guard m > 0, m <= n else { return m == 0 }
         return needle.withUnsafeBufferPointer { nb in
-            let first = Int32(nb[0])
-            var p = hay
-            let end = hay + (n - m + 1)
+            let byte = Int32(nb[a])
+            var p = hay + a                       // anchor positions that leave room for the needle
+            let end = hay + (n - m + 1) + a
             while p < end {
-                guard let hit = memchr(p, first, end - p) else { return false }
+                guard let hit = memchr(p, byte, end - p) else { return false }
                 let h = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self))
-                if memcmp(h, nb.baseAddress!, m) == 0 { return true }
+                if memcmp(h - a, nb.baseAddress!, m) == 0 { return true }
                 p = h + 1
             }
             return false
         }
+    }
+
+    /// Offset of the needle byte least likely to occur in text: letters by English
+    /// frequency, anything else (digits, symbols, non-ASCII) rarer than any letter.
+    static func rarestByte(_ needle: [UInt8]) -> Int {
+        let common = Array("etaoinsrhldcumfpgwybvkxjqz ".utf8)   // most → least frequent
+        var best = 0, bestRank = -1
+        for (i, b) in needle.enumerated() {
+            let rank = common.firstIndex(of: b) ?? common.count
+            if rank > bestRank { best = i; bestRank = rank }
+        }
+        return best
     }
 
     // MARK: Internals
@@ -211,7 +257,8 @@ public final class ClipStore {
         var ascii = true
         for b in bytes where b >= 0x80 { ascii = false; break }
         if ascii {
-            out.reserveCapacity(out.count + bytes.count)
+            // No reserveCapacity here: reserving exactly per clip defeats the array's
+            // geometric growth and made loading 10k clips quadratic (0.7 s vs 40 ms).
             for b in bytes {
                 if b >= 0x41 && b <= 0x5A { out.append(b | 0x20) }
                 else if Fold.isSeparator(b) || b == 0x0A || b == 0x0D { out.append(0x20) }
@@ -249,12 +296,11 @@ public final class ClipStore {
         d.append(op)
         withUnsafeBytes(of: t.littleEndian) { d.append(contentsOf: $0) }
         withUnsafeBytes(of: h.littleEndian) { d.append(contentsOf: $0) }
-        try? log.write(contentsOf: d)
+        log.append(d)
     }
 
     private func writeAdd(kind k: Kind, hash h: UInt64, app a: String?, text: [UInt8], time t: UInt32) {
-        guard let log else { return }
-        try? log.write(contentsOf: Self.encodeAdd(kind: k, hash: h, app: a, text: text, time: t))
+        log?.append(Self.encodeAdd(kind: k, hash: h, app: a, text: text, time: t))
     }
 
     static func encodeAdd(kind k: Kind, hash h: UInt64, app a: String?, text: [UInt8], time t: UInt32) -> Data {
@@ -272,10 +318,11 @@ public final class ClipStore {
     }
 
     /// Replays the log; returns the offset just past the last complete record (0 if the
-    /// file is missing or unrecognized).
+    /// file is missing or has no complete header; `AppendFile.claim` has already moved
+    /// a foreign or other-version file aside).
     private func replay(_ url: URL) -> Int {
         guard let data = try? Data(contentsOf: url, options: .alwaysMapped), data.count >= 8,
-              Array(data.prefix(4)) == Array(Self.magic.prefix(4)) else { return 0 }
+              Array(data.prefix(8)) == Self.magic else { return 0 }
         var good = 8
         data.withUnsafeBytes { raw in
             var i = 8
@@ -323,6 +370,7 @@ public final class ClipStore {
         let tmp = url.appendingPathExtension("tmp")
         do {
             try d.write(to: tmp, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp.path)
             if FileManager.default.fileExists(atPath: url.path) {
                 _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
             } else {

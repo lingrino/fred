@@ -45,6 +45,23 @@ import Testing
         #expect(v("1e3+1") == "1,001")
     }
 
+    @Test func reviewEdges() {
+        // 2026-11-16 review: unary minus binds looser than ^, as in written math.
+        #expect(v("-2^2") == "-4")
+        #expect(v("0-2^2") == "-4")
+        #expect(v("(-2)^2") == "4")
+        #expect(v("2^-2") == "0.25")
+        #expect(v("2*-3") == "-6")
+        #expect(v("-3!") == "-6")
+        // Hex literals ("0x10" was 0 × 10); a bare one converts.
+        #expect(v("0x10") == "16")
+        #expect(v("0xff+1") == "256")
+        #expect(v("0x") == nil)
+        // Cancellation noise below the operands' precision is zero, not 5.55e-17.
+        #expect(v("0.1+0.2-0.3") == "0")
+        #expect(v("1e-20*1") == "1e-20")
+    }
+
     @Test func notMath() {
         #expect(v("42") == nil)            // bare number: not a calculation
         #expect(v("2fold") == nil)

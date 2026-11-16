@@ -94,11 +94,13 @@ public enum Ranking {
     }
 
     /// Learning can lift strong tiers fully, weak tiers only partly: garbage never wins.
+    /// Strength is the text tier (`raw`, before the role penalty): a sub-setting's prefix
+    /// match is as good a match as an app's, it just starts lower (`s`, adjusted).
     @inline(__always)
-    static func blend(_ s: Int32, learned: Int32) -> Int32 {
+    static func blend(_ s: Int32, raw: Int32, learned: Int32) -> Int32 {
         let l = min(learned, maxLearned)
-        if s >= Matcher.Tier.acronym.rawValue { return s + l }
-        if s >= Matcher.Tier.substring.rawValue { return s + l / 2 }
+        if raw >= Matcher.Tier.acronym.rawValue { return s + l }
+        if raw >= Matcher.Tier.substring.rawValue { return s + l / 2 }
         return s + l / 4
     }
 }
@@ -140,17 +142,20 @@ public final class Searcher {
         touched.removeAll(keepingCapacity: true)
     }
 
+    // Item indices come from callers outside this file: checked explicitly, since this
+    // module builds with -Ounchecked (an out-of-range write would corrupt memory).
     public func clearBase() { base.update(repeating: 0, count: cap) }
-    public func setBase(item i: Int, _ v: Int32) { base[i] = v }
+    public func setBase(item i: Int, _ v: Int32) { if i >= 0 && i < cap { base[i] = v } }
 
     @inline(__always)
     public func addBoost(item i: Int, _ value: Int32) {
+        guard i >= 0 && i < cap else { return }
         if sparse[i] == 0 { touched.append(Int32(i)) }
         sparse[i] &+= value
     }
 
     /// Learned points currently applied to item `i` (for debugging/tests).
-    public func learned(_ i: Int) -> Int32 { min(base[i] + sparse[i], Ranking.maxLearned) }
+    public func learned(_ i: Int) -> Int32 { i >= 0 && i < cap ? min(base[i] + sparse[i], Ranking.maxLearned) : 0 }
 
     public func search(_ query: Matcher.Query, k: Int, learn: Learning? = nil, now: UInt32 = 0) -> TopK {
         var top = TopK(k: k)
@@ -192,16 +197,18 @@ public final class Searcher {
                     let floor = top.floor &+ penalty
                     if item != latch && Matcher.Tier.exact.rawValue + 99 + learned < floor { continue }
                     let weakFloor = max(floor, bestUnpinned == .min ? .min : bestUnpinned - Ranking.relativeCutoff &+ penalty)
-                    let lowest = Ranking.lowestUsefulTier(floor: floor, weakFloor: weakFloor, learned: learned)
+                    var lowest = Ranking.lowestUsefulTier(floor: floor, weakFloor: weakFloor, learned: learned)
+                    // The latched item gets +5000 for any strong tier: never skip those.
+                    if item == latch && lowest.rawValue > Matcher.Tier.acronym.rawValue { lowest = .acronym }
                     if !initialHit && lowest.rawValue > Matcher.Tier.substring.rawValue { continue }
                     let raw = Matcher.score(query, qp, cp, bytes + Int(sp >> 8), n, starts[e],
                                             allowLoose: kind != Int(Catalog.Kind.bookmark.rawValue), scratch,
                                             lowest: lowest, initialHit: initialHit)
                     if raw < 0 { continue }
                     let s = Ranking.adjust(raw, kind: kind, role: Int(packed >> 28))
-                    var final = Ranking.blend(s, learned: learned)
+                    var final = Ranking.blend(s, raw: raw, learned: learned)
                     if final > bestUnpinned { bestUnpinned = final }
-                    if item == latch && s >= Matcher.Tier.acronym.rawValue { final += Ranking.latchBonus }
+                    if item == latch && raw >= Matcher.Tier.acronym.rawValue { final += Ranking.latchBonus }
                     // Ties: more learned first, then shorter entries.
                     top.insert(item: Int32(item), score: final, tie: learned << 8 | Int32(255 - n), raw: s)
                 }

@@ -26,6 +26,10 @@ stats=$($CTL stats)
 grep -q "hotkeys: launcher registered, clipboard registered" <<<"$stats" && ok || bad "hotkeys: $(grep hotkeys <<<"$stats")"
 grep -q "login item: enabled" <<<"$stats" && ok || bad "$(grep 'login item' <<<"$stats")"
 
+# Every title is pre-rendered (a title that misses the atlas rasterizes per keystroke).
+read -r tin tall <<<"$(sed -nE 's/.*titles: ([0-9]+) of ([0-9]+),.*/\1 \2/p' <<<"$stats")"
+[[ -n "${tin:-}" && "$tin" -gt 0 && "$tin" == "$tall" ]] && ok || bad "title atlas: $(grep -o 'titles: [^;]*' <<<"$stats")"
+
 # Every source finds a plausible amount (thresholds well under today's counts).
 cat=$(grep "^catalog:" <<<"$stats")
 count() { sed -nE "s/.*$1 ([0-9]+).*/\1/p" <<<"$cat"; }
@@ -71,6 +75,8 @@ $CTL snapshot "$tmp/l.png" "safari" >/dev/null
 [[ $(stat -f %z "$tmp/l.png" 2>/dev/null || echo 0) -gt 10000 ]] && ok || bad "launcher snapshot empty"
 $CTL settings "$tmp/s.png" >/dev/null
 [[ $(stat -f %z "$tmp/s.png" 2>/dev/null || echo 0) -gt 10000 ]] && ok || bad "settings snapshot empty"
+$CTL clip snapshot "$tmp/c.png" >/dev/null
+[[ $(stat -f %z "$tmp/c.png" 2>/dev/null || echo 0) -gt 10000 ]] && ok || bad "clipboard snapshot empty"
 
 # Latency is reported, not judged (it depends on what the machine is doing).
 grep -E "keystroke→committed|hotkey→committed" <<<"$stats" | sed 's/^/  /'

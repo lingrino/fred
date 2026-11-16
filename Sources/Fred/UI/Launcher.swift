@@ -2,7 +2,7 @@ import AppKit
 @preconcurrency import Contacts
 import FredCore
 
-/// The ⌥Space launcher: one search field, up to five results.
+/// The ⌘Space launcher: one search field, up to five results.
 ///
 /// Every keystroke runs the full search synchronously on the main thread (tens of
 /// microseconds) and updates the rows in the same run-loop turn, so the result is in
@@ -22,6 +22,8 @@ final class Launcher: NSObject, QueryFieldDelegate {
         case answer(InstantAnswer)
         case field(ContactCard.Field)
         case process(NSRunningApplication)
+
+        var itemKey: UInt64? { if case .item(_, let k) = self { k } else { nil } }
     }
     enum Mode { case search, contact(ContactCard), forceQuit }
 
@@ -142,10 +144,16 @@ final class Launcher: NSObject, QueryFieldDelegate {
     }
 
     /// The catalog was replaced (background reindex): if results are on screen, recompute
-    /// them so rows, titles and indices all refer to the new catalog.
+    /// them so rows, titles and indices all refer to the new catalog — keeping the
+    /// selected item selected, so Enter still runs what the user arrowed to.
     func catalogChanged() {
         guard panel.shown, case .search = mode else { return }
+        let key = list.selected < refs.count ? refs[list.selected].itemKey : nil
         queryChanged()
+        if let key, let i = refs.firstIndex(where: { $0.itemKey == key }), i != list.selected {
+            list.select(i)
+            commitNow()
+        }
     }
 
     // MARK: Typing
@@ -172,7 +180,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
         case .forceQuit: renderForceQuit()
         default: renderSearch(text)
         }
-        searchLatency.add(nowNanos() - t0 - resizeNs)
+        if fromKey { searchLatency.add(nowNanos() - t0 - resizeNs) }
         if panel.shown {
             stResize.add(resizeNs)
             let t1 = nowNanos()
@@ -238,13 +246,13 @@ final class Launcher: NSObject, QueryFieldDelegate {
 
     /// ⌘1…⌘9 pick a row; ⌘↩ alternate action; ⌘O open contact in Contacts.app.
     func handleKeyEquivalent(_ e: NSEvent) -> Bool {
-        let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let mods = FloatingPanel.modifiers(e)
         guard mods.contains(.command) else { return false }
-        if let ch = e.charactersIgnoringModifiers, let d = Int(ch), d >= 1, d <= 9, mods == .command {
+        if let d = FloatingPanel.digit(e), mods == .command {
             if d <= refs.count { activate(d - 1, modifiers: []) }
             return true
         }
-        if e.charactersIgnoringModifiers == "o", case .contact(let card) = mode {
+        if e.charactersIgnoringModifiers == "o", mods == .command, case .contact(let card) = mode {
             hide()
             Actions.open(url: "addressbook://" + card.identifier)
             return true

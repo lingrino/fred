@@ -77,9 +77,10 @@ enum Actions {
     }
 
     /// Asks Finder (Automation permission). Checks emptiness first: emptying an empty
-    /// Trash can hang on recent macOS.
+    /// Trash can hang on recent macOS. Off main (a pending consent prompt blocks the
+    /// send), on one serial queue: NSAppleScript isn't thread-safe.
     static func emptyTrash() {
-        DispatchQueue.global(qos: .userInitiated).async {
+        scriptQueue.async {
             let src = """
             tell application "Finder"
                 if (count of items in trash) > 0 then empty trash
@@ -91,11 +92,16 @@ enum Actions {
         }
     }
 
+    /// Starts the bundle again once this process is gone: `open` while it still runs
+    /// would only re-activate it. (The single-instance lock is close-on-exec, so the
+    /// helper doesn't inherit it.)
+    private static let scriptQueue = DispatchQueue(label: "fred.applescript", qos: .userInitiated)
+
     static func relaunch() {
-        let path = Bundle.main.bundlePath
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "sleep 0.4; /usr/bin/open \"\(path)\""]
+        p.arguments = ["-c", "while /bin/kill -0 \(getpid()) 2>/dev/null; do /bin/sleep 0.05; done; /usr/bin/open \"$0\"",
+                       Bundle.main.bundlePath]
         try? p.run()
         NSApp.terminate(nil)
     }
@@ -104,9 +110,9 @@ enum Actions {
 
     /// Posts ⌘V to whatever app has keyboard focus. Needs "Device Control and Data
     /// Access" (Accessibility / PostEvent). Flags are set explicitly so held modifiers
-    /// (e.g. ⌥⇧ from the hotkey) don't leak into the paste.
+    /// (e.g. ⇧ from the ⌘⇧C hotkey) don't leak into the paste.
     static func postPaste() {
-        guard CGPreflightPostEventAccess() else { Log.error("paste: no PostEvent permission"); return }
+        guard CGPreflightPostEventAccess() else { missingPostEvent("paste"); return }
         let src = CGEventSource(stateID: .combinedSessionState)
         src?.setLocalEventsFilterDuringSuppressionState([.permitLocalMouseEvents, .permitSystemDefinedEvents],
                                                          state: .eventSuppressionStateSuppressionInterval)
@@ -124,7 +130,7 @@ enum Actions {
     /// CGEventKeyboardSetUnicodeString), split on character boundaries. Needs the same
     /// PostEvent permission as ⌘V.
     static func typeText(_ text: String) {
-        guard CGPreflightPostEventAccess() else { Log.error("type: no PostEvent permission"); return }
+        guard CGPreflightPostEventAccess() else { missingPostEvent("type"); return }
         let src = CGEventSource(stateID: .combinedSessionState)
         var chunk: [UniChar] = []
         func flush() {
@@ -143,6 +149,13 @@ enum Actions {
             chunk += u
         }
         flush()
+    }
+
+    /// Without the grant nothing reaches the app: say so (the value is still on the
+    /// clipboard for ⌘V by hand; Fred Settings shows which grant is missing).
+    private static func missingPostEvent(_ what: String) {
+        Log.error("\(what): no PostEvent permission (Accessibility)")
+        NSSound.beep()
     }
 
     /// Key code that produces "v" in the current layout (Dvorak etc.), default ANSI V.

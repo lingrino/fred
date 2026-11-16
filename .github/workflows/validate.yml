@@ -11,14 +11,19 @@ concurrency:
   group: validate-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# The image's default Xcode is older than this Mac's and its SDK refuses the 27.2 deployment
+# target; build with the same Xcode as local builds. Move with the local Xcode.
+env:
+  DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+
 jobs:
   lint:
     runs-on: xcode-27
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: toolchain
-        run: sw_vers && swift --version
+        run: sw_vers && xcodebuild -version && swift --version
       - name: lint
         run: make lint
 
@@ -26,7 +31,7 @@ jobs:
     runs-on: xcode-27
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the bundle version counts commits
       - name: test
@@ -42,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
         run: shellcheck scripts/*.sh scripts/fredctl
       - name: actionlint

@@ -10,7 +10,7 @@ public final class Catalog: @unchecked Sendable {
     }
 
     /// One item as produced by a source.
-    public struct Item: Sendable {
+    public struct Item: Sendable, Equatable {
         public var kind: Kind
         /// Shown in the result row.
         public var title: String

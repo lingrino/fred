@@ -12,7 +12,7 @@ let releaseFast: [SwiftSetting] = [
 
 let package = Package(
     name: "fred",
-    platforms: [.macOS("27.0")],
+    platforms: [.macOS("27.2")],   // the minimum, by the user's decision (AGENTS.md)
     products: [
         .executable(name: "Fred", targets: ["Fred"]),
         .executable(name: "fredbench", targets: ["FredBench"]),

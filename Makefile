@@ -13,9 +13,6 @@
 
 APP        := build/Fred.app
 INSTALLED  := /Applications/Fred.app
-SIGN_ID    := Fred Local Signing
-KEYCHAIN   := $(HOME)/Library/Keychains/fred-signing.keychain-db
-KC_PASS    := $(HOME)/Library/Application Support/FredDev/keychain-password
 
 .PHONY: all app install run test bench bench-save lint smoke check clean signing debug-app dev release
 

@@ -47,7 +47,7 @@ public final class Learning {
         if let url = logURL {
             let l = EventLog(url: url)
             log = l
-            for e in l.loaded { apply(e) }
+            for e in l.takeLoaded() { apply(e) }
             prune(now: UInt32(Date().timeIntervalSince1970))
         } else {
             log = nil
@@ -71,7 +71,6 @@ public final class Learning {
         log?.append(e)
         apply(e)
     }
-
 
     public var isEmpty: Bool { fKeys.isEmpty && assoc.isEmpty }
 
@@ -269,26 +268,34 @@ public struct PackedQuery: Comparable, Sendable {
 ///     u32 time | u64 key | u8 row | u8 qlen | qlen bytes      (little-endian)
 final class EventLog {
     let url: URL
-    private var handle: FileHandle?
+    private var handle: AppendFile?
     static let magic: [UInt8] = Array("FRDL".utf8) + [1, 0, 0, 0]
 
-    /// Events read at open (the file's valid prefix).
-    private(set) var loaded: [Learning.Event] = []
+    /// Events read at open (the file's valid prefix), until `takeLoaded`.
+    private var loaded: [Learning.Event] = []
 
     init(url: URL) {
         self.url = url
         let fm = FileManager.default
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: Data(Self.magic))
-        }
+        _ = AppendFile.claim(url, header: Self.magic)   // another format: moved aside
         let (events, goodEnd, size) = Self.read(url)
         loaded = events
-        handle = try? FileHandle(forWritingTo: url)
-        // A torn tail (crash or full disk mid-append) must be cut off before appending,
-        // or every later record would be misparsed behind it.
-        if goodEnd < size { try? handle?.truncate(atOffset: UInt64(goodEnd)) }
-        _ = try? handle?.seekToEnd()
+        if goodEnd == 0 {
+            // No file yet, or not even a complete header: start a fresh log.
+            fm.createFile(atPath: url.path, contents: Data(Self.magic), attributes: [.posixPermissions: 0o600])
+            handle = AppendFile(url)
+        } else {
+            // A torn tail (crash or full disk mid-append) must be cut off before appending,
+            // or every later record would be misparsed behind it.
+            handle = AppendFile(url, validLength: goodEnd < size ? goodEnd : nil)
+        }
+    }
+
+    /// Hands over the events read at open (once; they aren't kept in memory).
+    func takeLoaded() -> [Learning.Event] {
+        defer { loaded = [] }
+        return loaded
     }
 
     func append(_ e: Learning.Event) {
@@ -298,22 +305,14 @@ final class EventLog {
         d.append(e.row)
         d.append(UInt8(e.query.count))
         d.append(contentsOf: e.query)
-        try? handle?.write(contentsOf: d)
+        handle?.append(d)
     }
 
-    func flush() { try? handle?.synchronize() }
-
-    func readAll() -> [Learning.Event] { Self.read(url).events }
-
-    /// Valid events, the offset just past the last complete record, and the file size.
-    /// A file without the magic header is treated as empty (rewritten from scratch).
+    /// Valid events, the offset just past the last complete record (0: no complete
+    /// header), and the file size.
     static func read(_ url: URL) -> (events: [Learning.Event], goodEnd: Int, size: Int) {
         guard let data = try? Data(contentsOf: url) else { return ([], 0, 0) }
-        guard data.count >= 8, Array(data.prefix(4)) == Array(magic.prefix(4)) else {
-            // Unrecognized: start over with just a header.
-            try? Data(magic).write(to: url)
-            return ([], 8, 8)
-        }
+        guard data.count >= 8, Array(data.prefix(8)) == magic else { return ([], 0, data.count) }
         var out: [Learning.Event] = []
         var good = 8
         data.withUnsafeBytes { raw in

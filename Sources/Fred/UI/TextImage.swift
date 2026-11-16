@@ -44,11 +44,6 @@ enum TextImage {
         CTLineDraw(line, ctx)
         return Rendered(image: ctx.makeImage(), size: CGSize(width: w, height: h), baselineFromTop: ascent + 1)
     }
-
-    /// Offset of UTF-16 index `i` within an unrendered line (caret/selection geometry).
-    static func line(_ s: String, font: NSFont) -> CTLine {
-        CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [.font: font]))
-    }
 }
 
 /// Layer delegate that vetoes every implicit animation, for any key. An `actions`

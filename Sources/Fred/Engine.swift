@@ -11,8 +11,9 @@ final class Engine {
     /// Atlas slot per catalog item (aligned with catalog item indices).
     private var itemIcons: [Int32] = []
     private var atlasPaths: [String] = []
-    private var pendingApps: [AppScanner.App] = []
-    private var pendingPanes: [SettingsScanner.Pane] = []
+    /// What the icon atlas was rendered from: paths plus each app's Info.plist stamp, so
+    /// an app updated in place (same path, maybe a new icon) gets re-rendered.
+    private var atlasKey: [String] = []
     var onAtlas: ((IconAtlas) -> Void)?
     var onTitles: ((TitleAtlas?) -> Void)?
     /// Fires after every catalog swap (main thread).
@@ -24,10 +25,12 @@ final class Engine {
     var onReady: (() -> Void)?
 
     nonisolated static let dataDirPath = NSHomeDirectory() + "/Library/Application Support/Fred"
+    /// Clipboard history and learning live here: owner-only (0700).
     nonisolated static let dataDir: URL = {
         let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Fred", isDirectory: true)
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        chmod(u.path, 0o700)
         return u
     }()
 
@@ -71,7 +74,9 @@ final class Engine {
         appsByID = byID
         learning.prepare(catalog: c, into: searcher, now: now)
         let paths = apps.map(\.path) + panes.map(\.path) + [Bundle.main.bundlePath]
-        if paths != atlasPaths {
+        let key = apps.map { "\($0.path)\t\($0.stamp)" } + panes.map(\.path)
+        if key != atlasKey {
+            atlasKey = key
             atlasPaths = paths
             // Render icons off-main; rows show no icon for the first few ms after launch.
             DispatchQueue.global(qos: .userInitiated).async {
@@ -80,7 +85,7 @@ final class Engine {
                 Log.info("icon atlas: \(a.slots) icons in \((nowNanos() - t0) / 1_000_000) ms")
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        guard paths == self.atlasPaths else { return }
+                        guard key == self.atlasKey else { return }   // superseded
                         self.atlas = a
                         self.mapIcons()
                         self.onAtlas?(a)

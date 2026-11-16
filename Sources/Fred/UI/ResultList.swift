@@ -1,12 +1,12 @@
 import AppKit
 import QuartzCore
 
-/// The result rows: a fixed pool of row views created once, re-filled per keystroke.
+/// The result rows: a fixed pool of rows created once, re-filled per keystroke.
 ///
-/// Each row draws itself (selection pill, icon, Core Text title) in `draw(_:)` and only
-/// redraws when its content or selection state changes — typically 1–5 small rows per
-/// keystroke. Icons are zero-copy sub-images of the shared atlas. No Auto Layout, no
-/// table view, no implicit animations.
+/// Rows are plain layer trees (`RowLayer`), not views, and only change the layers whose
+/// content or selection state changed — typically 1–5 rows per keystroke. Icons are
+/// sub-images of the shared icon atlas, titles masks into the title atlas. No Auto
+/// Layout, no table view, no implicit animations.
 @MainActor
 final class ResultList: FlippedView {
     struct Row: Equatable {
@@ -231,8 +231,10 @@ final class RowLayer {
             detailLayer.contents = nil
         }
         let tc: NSColor = isSelected ? .alternateSelectedControlTextColor : .labelColor
-        if let item = row.titleItem, row.detail == nil, let t = titles, item < t.count, t.scale == scale {
-            // Pre-rendered mask: color is just the layer's background.
+        // Pre-rendered mask (color is just the layer's background) whenever it fits: titles
+        // in the atlas are cut at the full row width, so next to a detail ("True Tone" ·
+        // Displays) only one that is short enough can be used.
+        if let item = row.titleItem, let t = titles, t.has(item), t.scale == scale, t.size(item).width <= maxTitle + 0.5 {
             let size = t.size(item)
             ap.performAsCurrentDrawingAppearance { titleLayer.backgroundColor = tc.cgColor }
             titleLayer.contents = nil

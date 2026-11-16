@@ -3,12 +3,13 @@ import FredCore
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Clipboard history: watches the pasteboard, stores clips, and runs the ⌥⇧C panel.
+/// Clipboard history: watches the pasteboard, stores clips, and runs the ⌘⇧C panel.
 ///
 /// Watching: there is no pasteboard change notification on macOS, so `changeCount` is
 /// polled (cheap metadata read; does not trigger pasteboard-privacy alerts). Contents are
-/// read only when the count changes and the item isn't marked concealed/transient
-/// (password managers, nspasteboard.org markers).
+/// read only when the count changes, Fred is allowed to read them without asking ("Paste
+/// from Other Apps" = Allow; otherwise every copy would raise an alert), and the item
+/// isn't marked concealed/transient (password managers, nspasteboard.org markers).
 @MainActor
 final class ClipboardController: NSObject, QueryFieldDelegate {
     let store: ClipStore
@@ -96,10 +97,13 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         t.tolerance = 0.05
         RunLoop.main.add(t, forMode: .common)
         timer = t
-        // Daily-ish pruning of >90-day-old clips.
+        // Hourly pruning of >90-day-old clips (and of thumbnails nothing shows any more).
         let p = Timer(timeInterval: 3600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                if (self?.store.prune(now: UInt32(Date().timeIntervalSince1970)) ?? 0) > 0 { self?.storeChanged() }
+                guard let self else { return }
+                if self.store.prune(now: UInt32(Date().timeIntervalSince1970)) > 0 { self.storeChanged() }
+                let live = Set(self.store.hash)
+                self.thumbs = self.thumbs.filter { live.contains($0.key) }
             }
         }
         RunLoop.main.add(p, forMode: .common)
@@ -114,7 +118,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
     }
 
     private func capture(_ pb: NSPasteboard) {
-        guard let types = pb.types, !types.isEmpty else { return }
+        guard pb.accessBehavior == .alwaysAllow, let types = pb.types, !types.isEmpty else { return }
         for t in types where Self.skipTypes.contains(t.rawValue) { return }
         let source = pb.string(forType: Self.sourceType) ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let now = UInt32(Date().timeIntervalSince1970)
@@ -159,11 +163,24 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             }
             return
         }
-        if let s = pb.string(forType: .string), !s.isEmpty,
-           !s.allSatisfy({ $0.isWhitespace }) {
-            store.add(kind: .text, text: s, hash: ClipStore.hash(s, kind: .text), app: source, time: now)
-            storeChanged()
+        guard hasString else { return }
+        if isRemote {
+            // Universal Clipboard: reading the text pulls it from the other device, which
+            // can take seconds. Off main, like images, so hotkeys never wait for it.
+            let change = pb.changeCount
+            io.async { [weak self] in
+                guard NSPasteboard.general.changeCount == change, let s = NSPasteboard.general.string(forType: .string) else { return }
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.addText(s, app: source, time: now) } }
+            }
+            return
         }
+        if let s = pb.string(forType: .string) { addText(s, app: source, time: now) }
+    }
+
+    private func addText(_ s: String, app: String?, time: UInt32) {
+        guard !s.isEmpty, !s.allSatisfy({ $0.isWhitespace }) else { return }
+        store.add(kind: .text, text: s, hash: ClipStore.hash(s, kind: .text), app: app, time: time)
+        storeChanged()
     }
 
     /// Keeps PNG as-is; converts anything else (TIFF) to PNG. Returns pixel size.
@@ -224,7 +241,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
 
     func hide() { if panel.shown { panel.park() } }
 
-    /// Renders once invisibly and parks, so the first ⌥⇧C pays no first-render cost.
+    /// Renders once invisibly and parks, so the first ⌘⇧C pays no first-render cost.
     func warmUp() {
         guard !panel.shown else { return }
         panel.alphaValue = 0
@@ -330,20 +347,20 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
     /// ⌘1…⌘9 paste a visible row; ⌘↩ copy without pasting; ⌘⌫ delete the clip;
     /// ⌘, opens Fred Settings.
     private func handleKeyEquivalent(_ e: NSEvent) -> Bool {
-        let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let mods = FloatingPanel.modifiers(e)
         guard mods.contains(.command) else { return false }
-        if e.charactersIgnoringModifiers == "," {
+        if e.charactersIgnoringModifiers == ",", mods == .command {
             hide()
             onOpenSettings?()
             return true
         }
-        if let ch = e.charactersIgnoringModifiers, let d = Int(ch), d >= 1, d <= 9 {
+        if let d = FloatingPanel.digit(e), mods == .command {
             let i = offset + d - 1
             if i < results.count { paste(i, andPaste: true) }
             return true
         }
         switch e.keyCode {
-        case 51:
+        case 51 where mods == .command:
             guard selected < results.count else { return true }
             store.delete(results[selected])
             let keep = selected
@@ -364,6 +381,12 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
     private func paste(_ ri: Int, andPaste: Bool) {
         guard ri >= 0, ri < results.count else { return }
         let i = results[ri]
+        // An image whose file is gone (deleted by hand) must not wipe the clipboard.
+        var png: Data?
+        if store.kind[i] == .image {
+            guard let u = store.imageURL(store.hash[i]), let d = try? Data(contentsOf: u) else { NSSound.beep(); return }
+            png = d
+        }
         let pb = NSPasteboard.general
         pb.clearContents()
         switch store.kind[i] {
@@ -372,7 +395,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             let urls = store.text(i).split(separator: "\n").map { URL(fileURLWithPath: String($0)) as NSURL }
             pb.writeObjects(urls)
         case .image:
-            if let u = store.imageURL(store.hash[i]), let d = try? Data(contentsOf: u) {
+            if let d = png {
                 pb.setData(d, forType: .png)
                 if let tiff = NSImage(data: d)?.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
             }
@@ -404,6 +427,7 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
             guard parts.count > 1, !parts[1].isEmpty else { return "usage: clip forget <query>" }
             let r = store.search(parts[1], limit: 1000)
             for i in r.sorted(by: >) { store.delete(i) }
+            storeChanged()   // an open panel holds indices into the store
             return "deleted \(r.count)"
         case "show": show(); return "ok"
         case "pick":
@@ -414,14 +438,12 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         case "snapshot":
             guard parts.count > 1 else { return "usage: clip snapshot <png> [query]" }
             let bits = parts[1].split(separator: " ", maxSplits: 1).map(String.init)
-            let was = panel.shown
-            if !was { panel.alphaValue = 0; panel.position(height: ClipTheme.height); panel.orderFrontRegardless() }
-            field.text = bits.count > 1 ? bits[1] : ""
-            refresh()
-            let r = Snapshot.write(view: panel.content, to: bits[0])
-            if !was { panel.park() }
-            return r
-        default: return "clip: search <q> | show | snapshot <png> [q]"
+            return ControlServer.offscreen(panel, height: ClipTheme.height) {
+                field.text = bits.count > 1 ? bits[1] : ""
+                refresh()
+                return Snapshot.write(view: panel.content, to: bits[0])
+            }
+        default: return "clip: search <q> | forget <q> | show | pick <n> | snapshot <png> [q]"
         }
     }
 }
@@ -435,9 +457,10 @@ enum ClipTheme {
 }
 
 enum ClipText {
-    /// First non-empty line, whitespace-collapsed, capped — computed only for visible rows.
+    /// First non-empty line, whitespace-collapsed, capped — computed only for visible rows,
+    /// from the clip's first 4 KB: a row costs the same for a 10 B clip and an 8 MB one.
     @MainActor static func firstLine(_ store: ClipStore, _ i: Int) -> String {
-        let s = store.text(i)
+        let s = store.head(i, bytes: 4096)
         var out = ""
         for line in s.split(whereSeparator: \.isNewline) {
             let t = line.trimmingCharacters(in: .whitespaces)
@@ -490,6 +513,13 @@ final class ClipPreview: FlippedView {
         meta.frame = NSRect(x: 8, y: bounds.height - 18, width: bounds.width - 16, height: 16)
     }
 
+    private static let dateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        return df
+    }()
+
     /// The path if `text` is exactly one existing image file.
     static func singleImageFile(_ text: String) -> String? {
         guard !text.contains("\n") else { return nil }
@@ -506,9 +536,7 @@ final class ClipPreview: FlippedView {
         shown = key
         let date = Date(timeIntervalSince1970: TimeInterval(store.time[i]))
         let app = store.app(i).flatMap { engine.appName(bundleID: $0) } ?? store.app(i) ?? ""
-        let df = DateFormatter()
-        df.dateStyle = .medium
-        df.timeStyle = .short
+        let df = Self.dateFormatter
         switch store.kind[i] {
         case .image:
             scroll.isHidden = true
@@ -526,11 +554,13 @@ final class ClipPreview: FlippedView {
             imageView.isHidden = true
             imageView.image = nil
             scroll.isHidden = false
-            var s = store.text(i)
-            if s.utf8.count > 200_000 { s = String(s.prefix(200_000)) + "\n…" }
-            textView.string = s
+            // Decode at most 200 KB, once; a character count of anything bigger isn't worth
+            // the full pass, its size is.
+            let bytes = store.byteCount(i)
+            let s = store.head(i, bytes: 200_000)
+            textView.string = bytes > 200_000 ? s + "\n…" : s
             textView.scroll(.zero)
-            let chars = store.kind[i] == .text ? "\(store.text(i).count) chars" : "files"
+            let chars = store.kind[i] != .text ? "files" : bytes > 200_000 ? "\(bytes / 1024) KB" : "\(s.count) chars"
             meta.stringValue = [chars, app, df.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
         }
     }

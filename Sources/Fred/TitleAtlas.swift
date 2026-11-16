@@ -8,7 +8,10 @@ import FredCore
 /// uploaded to the window server.
 ///
 /// Built off-main with the catalog (parallel across cores), rebuilt wholesale when the
-/// catalog changes. ~18 KB per title at 2× (A8) — ~15 MB for this Mac's catalog.
+/// catalog changes. One 4096-px-wide A8 image, at most 16384 px tall (the texture limit):
+/// 46-px shelves at 2×, so ~350 shelves — about 5,700 short app titles or ~1,100
+/// full-width ones. This Mac's ~1,000 titles take ~3,400 px (~14 MB). Titles that don't
+/// fit are left out (`has` is false) and their rows rasterize, as before the atlas.
 final class TitleAtlas: @unchecked Sendable {
     let image: CGImage
     let scale: CGFloat
@@ -18,6 +21,9 @@ final class TitleAtlas: @unchecked Sendable {
     let width: Int, height: Int
 
     static let pageWidth = 4096
+    static let maxHeight = 16384
+    /// Titles that didn't fit (0 on any realistic catalog; shown by `fredctl stats`).
+    let missing: Int
 
     init?(titles: [String], font: NSFont, maxWidth: CGFloat, scale: CGFloat) {
         self.scale = scale
@@ -42,18 +48,20 @@ final class TitleAtlas: @unchecked Sendable {
             s.lines[i] = line
             s.widths[i] = Int(((CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) + 2) * scale).rounded(.up))
         }
-        // Shelf packing in item order (deterministic).
-        var r = [CGRect](repeating: .zero, count: n)
+        // Shelf packing in item order (deterministic); past the texture limit, titles are
+        // left out (null rect) rather than failing the whole atlas.
+        var r = [CGRect](repeating: .null, count: n)
         var x = 0, y = 0
         for i in 0..<n {
             let w = min(widths[i], Self.pageWidth)
             if x + w > Self.pageWidth { x = 0; y += rowPx }
+            if y + rowPx > Self.maxHeight { y -= rowPx; break }   // that new shelf doesn't fit
             r[i] = CGRect(x: x, y: y, width: w, height: rowPx)
             x += w
         }
         let W = Self.pageWidth
         let H = max(rowPx, y + rowPx)
-        guard H <= 16384 else { return nil }   // texture limit; ~70k titles
+        missing = r.reduce(0) { $0 + ($1.isNull ? 1 : 0) }
         let bytes = W * H
         let buf = UnsafeMutableRawPointer.allocate(byteCount: bytes, alignment: 128)
         buf.initializeMemory(as: UInt8.self, repeating: 0, count: bytes)
@@ -70,7 +78,7 @@ final class TitleAtlas: @unchecked Sendable {
             else { return }
             ctx.scaleBy(x: scale, y: scale)
             ctx.setShouldSmoothFonts(false)
-            for i in 0..<n where Int(r[i].minY) / rowPx == s {
+            for i in 0..<n where !r[i].isNull && Int(r[i].minY) / rowPx == s {
                 ctx.textPosition = CGPoint(x: r[i].minX / scale + 1, y: descent + 1)
                 if let l = lines[i] { CTLineDraw(l, ctx) }
             }
@@ -87,9 +95,12 @@ final class TitleAtlas: @unchecked Sendable {
         height = H
     }
 
+    /// Whether item `i`'s title is in the atlas.
+    func has(_ i: Int) -> Bool { i >= 0 && i < rects.count && !rects[i].isNull }
+
     /// Size in points of item `i`'s title.
     func size(_ i: Int) -> CGSize {
-        guard i < rects.count else { return .zero }
+        guard has(i) else { return .zero }
         return CGSize(width: rects[i].width / scale, height: lineHeight)
     }
 

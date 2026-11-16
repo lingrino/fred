@@ -65,9 +65,7 @@ public final class SearchIndex: @unchecked Sendable {
         var tmp: [UInt8] = []
         for e in entries {
             tmp.removeAll(keepingCapacity: true)
-            let ws = Fold.fold(e.text, into: &tmp)
-            // Trim trailing separators; cap length.
-            while tmp.last == 0x20 { tmp.removeLast() }
+            let ws = Fold.fold(e.text, into: &tmp)   // no leading/trailing/double spaces
             if tmp.isEmpty { continue }
             let len = min(tmp.count, Self.maxEntryLength)
             let start = arena.count

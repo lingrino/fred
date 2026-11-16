@@ -4,7 +4,7 @@ import FredCore
 
 /// Wires the app together. Startup order is latency-driven: the hotkey and the (empty)
 /// panel exist before any indexing starts, so Fred is usable the instant it launches
-/// and results fill in as sources finish (tens of ms).
+/// and results fill in once the sources are read (~0.2 s; contacts are the slowest).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var engine: Engine!
@@ -41,17 +41,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Picks up a grant given while Fred is running (no OS notification exists for
-    /// that): when a source is still empty and its permission now checks out, reindex.
+    /// that): when a source is still empty and its permission has just started checking
+    /// out, reindex it — once, not on every hotkey (Chrome may simply have no bookmarks).
     private func retryMissingSources() {
         var have = [Int](repeating: 0, count: 5)
         for k in engine.catalog.kinds { have[Int(k.rawValue)] += 1 }
-        if have[Int(Catalog.Kind.bookmark.rawValue)] == 0, Permissions.status(.chromeData) == true {
-            indexer.schedule(.bookmarks, delay: 0)
+        if have[Int(Catalog.Kind.bookmark.rawValue)] == 0 {
+            let ok = Permissions.status(.chromeData) == true
+            if ok && !granted.bookmarks { indexer.schedule(.bookmarks, delay: 0) }
+            granted.bookmarks = ok
         }
-        if have[Int(Catalog.Kind.contact.rawValue)] == 0, Permissions.status(.contacts) == true {
-            indexer.schedule(.contacts, delay: 0)
+        if have[Int(Catalog.Kind.contact.rawValue)] == 0 {
+            let ok = Permissions.status(.contacts) == true
+            if ok && !granted.contacts { indexer.schedule(.contacts, delay: 0) }
+            granted.contacts = ok
         }
     }
+    private var granted = (bookmarks: false, contacts: false)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let t0 = nowNanos()
@@ -107,9 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
             reason: "Fred answers global hotkeys")
-        control = ControlServer(app: self)
-        control?.start()
-        mark("control")
+        if ControlServer.enabled {
+            control = ControlServer(app: self)
+            control?.start()
+            mark("control")
+        }
 
         var line = "launched in \((nowNanos() - t0) / 1000) µs:"
         var prev = t0

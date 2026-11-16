@@ -31,7 +31,8 @@ To pick it up again:
   rows) over apps, System Settings panes and the settings inside them ("True Tone" →
   Displays, from each pane's `.searchTerms`), system commands, Chrome bookmarks, contacts.
   Instant-answer row: calculator ("2+2"), else `Converter` (units, data sizes/rates,
-  durations, time zones: "5 km in mi", "1 GiB to MB", "3pm pst in tokyo"; offline).
+  durations, time zones: "5 km in mi", "1 GiB to MB", "3pm pst in tokyo"; offline; a
+  number glued to a one-letter unit, "4k"/"3d", is left to search, "3 d" converts).
   Learns from picks (zoxide/Firefox-style). Enter = row 1 /
   selected row, ⌘1…⌘5 = row n, ↑↓/⌃N⌃P move, Esc closes, ⌘↩ reveals an app in Finder.
   Contact → card of phones/emails/addresses: Enter (or ⌘n/click) TYPES the value into the
@@ -65,7 +66,8 @@ make test          # unit tests (debug, all runtime checks on)
 make smoke         # scripts/smoke.sh: live checks against the running app via fredctl
 make dev           # release build → /Applications/Fred.app, relaunch with --regular (Dock icon so computer-use can see it)
 make install       # same, as the user runs it (accessory app, no Dock icon)
-make bench         # FredBench over the real catalog, Δ vs Benchmarks/baseline.tsv
+make bench         # FredBench over a synthetic seeded catalog, Δ vs Benchmarks/baseline.tsv
+                   #   (then the same queries over this Mac's catalog, not baselined)
 make bench-save    # …and make this run the baseline
 make release       # what CI publishes (build/release/: zip + cask), self-signed locally
 scripts/fredctl …  # talk to the running app (see "Control socket")
@@ -91,7 +93,9 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   pushes) and its `lint`, `test` and `scripts` jobs: `make lint`; `make test` plus a
   release dry run (ad-hoc signed) and `brew style` on the generated cask; shellcheck and
   actionlint. Runner label `xcode-27`: GitHub's macOS 27 arm64 image (images are named
-  by Xcode major). `make smoke` and the on-screen checks need the installed app and its
+  by Xcode major). Its default Xcode lags (27.1 with the 27.0 SDK, which refuses the 27.2
+  deployment target), so both workflows set `DEVELOPER_DIR` to the Xcode this Mac uses
+  (27.2). `make smoke` and the on-screen checks need the installed app and its
   grants, so they stay local: `make check` before opening a PR.
 - `review`: Claude reviews each PR (anthropics/claude-code-action).
 - `release`, on every push to main: version 0.0.N, N = commits on main (squash merges, so
@@ -103,7 +107,11 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
 - Secrets come from Terraform in lingrino/infra: `HOMEBREW_TAP_GITHUB_TOKEN`, and from
   AWS Secrets Manager `github/keys/fred`: `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`
   (Developer ID Application certificate), `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`,
-  `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool).
+  `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool). The user puts them
+  there with `scripts/store-release-secrets.sh <.p12> <AuthKey_ID.p8> <issuer>`: it asks
+  for the .p12 password, checks the identity imports and notarytool accepts the key, then
+  writes the JSON. Rerun it with a new certificate before the current one expires (the
+  first: 2027-12-16); releases already signed and notarized keep working after that.
 - Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
   Fred once its executable is a different file.
@@ -126,7 +134,7 @@ Toolchain (Xcode 27 is active on this Mac since 2026-11, and in CI):
 ## Privacy grants (user-only; check with `fredctl permissions`)
 
 contacts (Contacts) · postEvents ("Device Control and Data Access" = Accessibility, for ⌘V)
-· pasteboard (Paste from Other Apps = Allow) · chromeData (Files & Folders → Google Chrome;
+· pasteboard (Paste from Other Apps = Allow) · chromeData (Full Disk Access;
 macOS 27 blocks other apps from Chrome's profile dir) · finder (Automation, Empty Trash)
 · loginwindow (Automation, Sleep/Restart/Shut Down).
 Fred re-checks empty sources when the launcher opens, so grants given while running apply.
@@ -142,7 +150,7 @@ on its own queue and main only reads the cached result; `Actions.sendToLoginWind
 
 ```
 Sources/FredCore/          pure logic, no AppKit — unit-tested, benchmarked
-  Fold.swift               text folding (case/diacritics/separators) + word-start masks + char masks
+  Fold.swift               text folding (case/diacritics/marks/separator runs) + word-start masks + char masks
   SearchIndex.swift        SoA index in ONE 128B-aligned allocation (masks/spans/starts/items/bytes)
   Matcher.swift            tiered matcher: EXACT 1300 > PREFIX 900 > WORDPREFIX 800 > ACRONYM 700 > SUBSTRING 500 > FUZZY 300 (+0…79 fine)
   Search.swift             TopK (inline storage), Ranking (kind prior, roles, learning blend, cutoff), Searcher (hot loop)
@@ -151,10 +159,11 @@ Sources/FredCore/          pure logic, no AppKit — unit-tested, benchmarked
   Calculator.swift         allocation-free recursive-descent evaluator
   Converter.swift          units/data/time-zone instant answers: byte-level parsing, offset math (no formatters)
   ClipStore.swift          clipboard history SoA + append-only log + images dir + search
+  AppendFile.swift         the logs' write side (O_APPEND, 0600, torn-write cut-off, foreign files moved aside)
   Disjoint.swift           @unchecked Sendable box for concurrentPerform buffers (disjoint writes)
   Sources/*.swift          AppScanner, SettingsScanner, Commands, ChromeBookmarks (Foundation only)
 Sources/Fred/              the app
-  main.swift               FredApplication (fast key dispatch to QueryField) + entry point
+  main.swift               FredApplication (fast key dispatch to QueryField), single-instance lock, entry point
   AppDelegate.swift        wiring; startup order (indexer first, hotkey + panels, deferred checks)
   Engine.swift             catalog/searcher/learning/icon atlas/title atlas owner (main thread)
   Indexer.swift            background reindex (sources in parallel) on FSEvents / Contacts change / wake
@@ -163,13 +172,14 @@ Sources/Fred/              the app
   UI/Panel.swift           FloatingPanel: fixed-size non-activating window, Liquid Glass clipped by a mask,
                            present()/park() instead of order in/out; Theme constants; DevMode
   UI/QueryField.swift      custom single-line text input (fast path + NSTextInputClient for IME)
-  UI/ResultList.swift      ResultList (NSView host) + RowLayer (pure CALayer row)
+  UI/ResultList.swift      ResultList (NSView host) + RowLayer (pure CALayer row; title-atlas mask when it fits)
   UI/TextImage.swift       one-line Core Text → CGImage for dynamic strings; CALayer.still()
   UI/Launcher.swift        launcher controller: keystroke → search → rows, keys, modes, actions, latency stats
   ClipboardController.swift pasteboard polling, clipboard panel + preview, paste
   Actions.swift            open, system commands (loginwindow AEs, lock, Finder), ⌘V posting
   SettingsWindow.swift     "Fred Settings" health window (AppKit, plain NSWindow)
   LiveTests.swift          on-screen checks via posted key events: hotkeybench, typing, ⌘, (user idle only)
+  Snapshot.swift           offscreen PNG of a view's layer tree (fredctl snapshot/card/settings)
   ContactsSource / ContactCard / Permissions / LoginItem / HotKeys / ControlServer / Log
 Sources/FredBench/         `fredbench scan` (what sources find), `bench`, `save` (baseline)
 Benchmarks/baseline.tsv    p50 per benchmark (ns), compared by `make bench`
@@ -191,13 +201,15 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
   sub-setting search terms (−500). Sub-settings fill rows under real apps/panes ("display"
   → Displays pane, then the "Display" sub-setting); with adjusted score < ACRONYM they
   count as weak for the relative cutoff. Branch-and-bound adds the role penalty to the
-  floor, so sub-setting entries are mostly skipped once 5 good rows exist.
+  floor, so sub-setting entries are mostly skipped once 5 good rows exist; a differential
+  fuzz test (`FuzzTests.pruningNeverChangesResults`) checks pruning never changes results.
 - Sub-setting terms shared by ≥4 settings ("privacy", "screen") or repeating a title word
   are dropped at scan time (`SettingsScanner.pruneKeywords`): noise and search cost.
 - 1-char queries: EXACT/PREFIX (+WORDPREFIX except bookmarks). 2 chars: up to ACRONYM.
   FUZZY needs ≥3 chars, first char on a word start, ≤ m/3 gaps in the tightest window.
-- Learning points `min(300, 15·log2(1+F) + 50·A)`, full for tiers ≥ ACRONYM, ½ substring,
-  ¼ fuzzy. Latch (+5000) when one item owns an exact query. Weak results (substring/fuzzy,
+- Learning points `min(300, 15·log2(1+F) + 50·A)`, full for text tiers ≥ ACRONYM, ½
+  substring, ¼ fuzzy — the text tier before role penalties, so picks promote sub-settings
+  too. Latch (+5000, any tier ≥ ACRONYM) when one item owns an exact query. Weak results (substring/fuzzy,
   raw tier < ACRONYM) more than 350 below the best unpinned score are dropped; strong
   tiers are never cut ("lock" shows the exact "Lock" AND the prefix "Lock Screen").
 - Tests in `Tests/FredCoreTests/MatcherTests.swift` (and `RegressionTests.swift`) pin the intended orderings. Add a test
@@ -220,7 +232,9 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
   item keys (resolve with `Catalog.item(forKey:)`), the clipboard list re-resolves by hash
   and refreshes on every store change while shown.
 - Logs (learning, clipboard) truncate a torn tail before appending; never append after an
-  unparsed tail.
+  unparsed tail (`AppendFile`: O_APPEND, a failed write is cut back off).
+- The query field holds at most 256 UTF-16 units: it typesets and rasterizes its whole
+  text on every edit, and nothing reads past 80 bytes anyway.
 - Panels are built once and only ordered in/out. No window animations, no implicit CA actions.
 - Every Fred-created layer uses `CALayer.still()` (delegate `NoActions` vetoes ALL implicit
   animations — an `actions` dictionary missed the default "transition" on mask removal,
@@ -237,13 +251,20 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
 ## Storage (`~/Library/Application Support/Fred/`)
 
 - `learning.log` — "FRDL" v1; records `u32 time | u64 key | u8 row | u8 qlen | q`.
-- `clipboard.log` — "FRDC" v1; ADD/TOUCH/DELETE records; compacted at load. `images/<hash>.png`.
-- `control.sock` — dev socket.
-Item keys: FNV-1a of (kind, payload); apps use bundle id (path fallback). Changing key
-derivation orphans learned history — don't, or migrate.
+- `clipboard.log` — "FRDC" v1; ADD/TOUCH/DELETE records; compacted at load and by the
+  hourly prune once garbage is large. `images/<hash>.png`.
+- `fred.lock` — flock held by the running Fred: one instance per user.
+- `control.sock` — dev socket (local builds only).
+The directory is 0700, logs 0600. A log with another header or version is moved aside
+(`*.unrecognized-<time>`), never overwritten. Item keys: FNV-1a of (kind, payload); apps
+use bundle id (path fallback). Changing key derivation orphans learned history — don't, or
+migrate. `FormatTests` pins keys, command ids, clip hashes and both log formats byte for byte.
 
 ## Control socket (`scripts/fredctl`)
 
+Only in locally built apps (`bundle.sh` sets FredDevTools in Info.plist; releases have no
+socket): it reads contacts and clipboard history with Fred's grants. Commands that render
+offscreen refuse with "busy" while the user has that panel on screen.
 `stats` (incl. per-stage latency), `resetstats`, `permissions`, `request`, `query <q>` (also
 prints the instant-answer row and its µs), `settings [png]` (no arg: show the window — takes
 focus; with a path: render it offscreen),
@@ -266,13 +287,15 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
 
 ## Testing etiquette on the user's Mac
 
-- The repo is public. Never commit the user's real data — contact names, bookmarks,
+- Treat the repo as public (it is private only until releases are signed, see "Open
+  decisions"). Never commit the user's real data — contact names, bookmarks,
   clipboard text, learning history, query logs, or the names of third-party apps installed
   on their Mac — in tests, docs, benchmarks, comments or commit messages, even when
   debugging a real-world ranking complaint: reproduce it with fictional names (Goober
   Chroma, Vivid Story Composer, iTally, Kermit Frog, `*.example` hosts). Apple's stock
   apps (Safari, Finder, System Settings…) are fine.
-  Push only branches for PRs (main takes PRs only); other refs in this clone (e.g.
+  Push only branches for PRs (main takes PRs only; never `git push --all`/`--mirror`);
+  other refs in this clone (e.g.
   `refs/codex/…` checkpoints) are local tool state.
 
 - Never execute Sleep/Restart/Shut Down/Lock/Empty Trash/Force Quit for testing — use
@@ -295,7 +318,8 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 - Liquid Glass / `NSGlassEffectView` cost (re-measure with `fredctl hotkeybench 30` when idle).
 - Toolchain: the CLT workarounds (`scripts/swift.sh`, only when the CLT is active), new
   compiler diagnostics (`make lint`), the CI runner label (`xcode-27`: move to the next
-  Xcode major's label when GitHub ships it). Signing keychain + password in
+  Xcode major's label when GitHub ships it) and the workflows' `DEVELOPER_DIR` (keep it on
+  the local Xcode; the image's readme lists what's installed). Signing keychain + password in
   `~/Library/Application Support/FredDev/` — losing it means a new identity, and the user
   must re-grant every permission (one-way door: ask first).
 
@@ -312,8 +336,9 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 Keystroke (p50): OS delivery ~0.4–1.5 ms (outside our control) → Fred ~0.76 ms in-process:
 key handling ~0.28 ms (QueryField fast path + field text render) · search+rows ~0.04 ms ·
 draw+commit ~0.44 ms (mostly the fixed CA→window-server commit). Hotkey → frame committed
-~2.2 ms (becoming key ~1.2 ms of it). Search kernel alone (`make bench`, 2026-11-15): p50
-4–21 µs over a 13.4k-entry index; the ~600 sub-settings (+2.7k entries, long strings) cost
+~2.2 ms before Liquid Glass (becoming key ~1.2 ms of it), 5.3–6.4 ms with it (below).
+Search kernel alone (`make bench`, 2026-11-16, synthetic catalog): p50 4–25 µs over a
+13k-entry index (this Mac's own ~2.3k entries: 1–6 µs); sub-settings (long strings) cost
 ~+3 µs on few-match queries. Converter: 0.04 µs for plain words, ~0.3 µs for digit
 queries that aren't conversions, ~1 µs per unit answer, ~5 µs per time answer (it was
 15/95 µs with String/DateFormatter/Calendar — keep it on bytes and offset arithmetic).
@@ -331,7 +356,8 @@ What was measured and why the code looks the way it does — don't regress these
   change → one full-height glass view, never resized, clipped by a mask layer; panels are
   parked, not ordered out. On-screen A/B 2026-11-15 (`hotkeybench 30`, p50, five runs):
   ⌘Space→frame glass 5.3–6.4 ms vs vibrancy 3.4–3.6 ms (commit ~3 vs 0.7 ms); keystroke→
-  frame ~2 ms both. The user chose glass at +2–2.5 ms (both < one 120 Hz frame); the
+  frame ~2 ms both. 2026-11-16: 8.1–8.4 ms (makeKey ~4.5 ms) — identical for the builds
+  before and after that day's review, so the change is outside Fred (not investigated). The user chose glass at +2–2.5 ms (both < one 120 Hz frame); the
   earlier "~10 ms" no longer reproduces. Vibrancy code was deleted (git history).
 - Ordering a window out discards its rendered state → panels are "parked" (ordered in,
   alpha 0, click-through, `canBecomeKey == false`) instead of ordered out.

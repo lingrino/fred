@@ -1,4 +1,5 @@
 @preconcurrency import Contacts
+import Foundation
 
 /// A contact's actionable fields, fetched on demand when a contact result is chosen.
 struct ContactCard {
@@ -25,13 +26,20 @@ struct ContactCard {
     /// ⌘↩ on a field: open it with its natural app.
     @MainActor
     static func open(_ f: Field) {
-        let enc = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s }
         switch f.icon {
         case .phone:
-            let digits = f.value.filter { $0.isNumber || $0 == "+" }
+            // Dial the number itself: stop at an extension ("ext. 12", "x12", ",12", ";12").
+            var digits = ""
+            for ch in f.value {
+                if ch.isNumber || ch == "+" { digits.append(ch) }
+                else if ch.isLetter || ch == "," || ch == ";" || ch == "#" { break }
+            }
             Actions.open(url: "tel:" + digits)
         case .email: Actions.open(url: "mailto:" + f.value)
-        case .address: Actions.open(url: "maps://?q=" + enc(f.value))
+        case .address:
+            // A query value: & = + # would end or split it ("Smith & Co, …").
+            let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))
+            Actions.open(url: "maps://?q=" + (f.value.addingPercentEncoding(withAllowedCharacters: allowed) ?? f.value))
         case .url: Actions.open(url: f.value.contains("://") ? f.value : "https://" + f.value)
         default: Actions.copy(f.value)
         }

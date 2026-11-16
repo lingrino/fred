@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import QuartzCore
 
 @MainActor
@@ -19,9 +20,12 @@ protocol QueryFieldDelegate: AnyObject {
 ///
 /// Anything the fast path doesn't recognize (dead keys like ⌥e, input methods, the emoji
 /// picker, dictation) goes through the system input context via `NSTextInputClient`, so
-/// composed input still works — just without the shortcut.
+/// composed input still works — just without the shortcut. Printable keys only take the
+/// fast path while the input source is a plain keyboard layout: with an input method
+/// (Japanese, Chinese, Korean…) even an ASCII key can start a composition.
 ///
-/// Text is kept as UTF-16 (NSMutableString) because NSTextInputClient speaks NSRange.
+/// Text is kept as UTF-16 (NSMutableString) because NSTextInputClient speaks NSRange, and
+/// capped at `maxLength`: the whole text is typeset and rasterized on every edit.
 @MainActor
 final class QueryField: NSView, @preconcurrency NSTextInputClient {
     enum Command { case up, down, pageUp, pageDown, enter, commandEnter, escape, tab }
@@ -64,10 +68,15 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
 
     // MARK: Public text API
 
+    /// UTF-16 units. Nothing reads further: the matcher uses 32 bytes, the converter 80,
+    /// the calculator 512 — and a pasted megabyte would cost ~0.4 s per keystroke to
+    /// typeset and rasterize (a 21-million-pixel-wide bitmap).
+    static let maxLength = 256
+
     var text: String {
         get { storage as String }
         set {
-            storage.setString(newValue)
+            storage.setString(Self.clip(newValue, to: Self.maxLength))
             marked = NSRange(location: NSNotFound, length: 0)
             select(NSRange(location: storage.length, length: 0))
             undoStack.removeAll(); redoStack.removeAll()
@@ -160,8 +169,8 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
             default: return false
             }
         }
-        // Printable ASCII typed with at most Shift: insert directly.
-        guard mods.isSubset(of: [.shift]), let chars = e.characters, chars.utf16.count == 1,
+        // Printable ASCII typed with at most Shift on a plain layout: insert directly.
+        guard Self.plainLayout, mods.isSubset(of: [.shift]), let chars = e.characters, chars.utf16.count == 1,
               let u = chars.utf16.first, u >= 0x20 && u < 0x7F else { return false }
         replace(selection, with: chars)
         return true
@@ -169,11 +178,40 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
 
     private func command(_ c: Command) -> Bool { delegate?.queryField(self, command: c) ?? false }
 
+    /// Whether the current input source is a plain keyboard layout (ABC, Dvorak…), kept
+    /// current by the system's input-source-changed notification.
+    private static var plainLayout: Bool = {
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil, queue: .main) { _ in MainActor.assumeIsolated { plainLayout = isPlainLayout() } }
+        return isPlainLayout()
+    }()
+
+    private static func isPlainLayout() -> Bool {
+        guard let src = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let p = TISGetInputSourceProperty(src, kTISPropertyInputSourceType) else { return true }
+        return CFEqual(Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue(), kTISTypeKeyboardLayout)
+    }
+
+    /// The longest prefix of `s` that fits in `n` UTF-16 units without splitting a character.
+    private static func clip(_ s: String, to n: Int) -> String {
+        guard s.utf16.count > n else { return s }
+        var used = 0, end = s.startIndex
+        for i in s.indices {
+            let w = s[i].utf16.count
+            if used + w > n { break }
+            used += w
+            end = s.index(after: i)
+        }
+        return String(s[..<end])
+    }
+
     // MARK: Editing primitives
 
-    private func replace(_ r: NSRange, with s: String, recordUndo: Bool = true) {
+    private func replace(_ r: NSRange, with new: String, recordUndo: Bool = true) {
         let t0 = nowNanos()
-        defer { _ = t0 }
+        let s = Self.clip(new, to: max(0, Self.maxLength - (storage.length - r.length)))
+        if s.isEmpty && !new.isEmpty && r.length == 0 { return }   // full: the key does nothing
         if recordUndo {
             undoStack.append((storage as String, selection))
             if undoStack.count > 200 { undoStack.removeFirst() }
@@ -268,8 +306,9 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
     }
 
     @objc func paste(_ sender: Any?) {
-        guard var s = NSPasteboard.general.string(forType: .string) else { return }
-        s = s.replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
+        guard let all = NSPasteboard.general.string(forType: .string) else { return }
+        // Only what can fit is kept (see `maxLength`), before any other pass over it.
+        let s = String(all.prefix(Self.maxLength)).replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
         if hasMarkedText() {
             // Pasting over in-progress composition: end it, or the stale marked range
@@ -466,6 +505,10 @@ final class QueryField: NSView, @preconcurrency NSTextInputClient {
         let i = CTLineGetStringIndexForPosition(line, CGPoint(x: x + scrollX, y: 0))
         return i == kCFNotFound ? storage.length : max(0, min(i, storage.length))
     }
+
+    /// Parked panels don't blink: a hidden caret animation would keep Core Animation (and
+    /// the window server) ticking. The next edit or show restarts it.
+    func stopBlink() { caret.removeAnimation(forKey: "blink") }
 
     /// Solid while typing, then blinks (Core Animation; no redraws, no timers).
     private func restartBlink() {

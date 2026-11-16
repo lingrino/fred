@@ -11,6 +11,9 @@
 #   "-"    ad-hoc: CI checks that build and verify the bundle but never install it
 #   other  that identity from the keychain search list, with a secure timestamp
 #          (Developer ID releases; notarization requires the timestamp)
+# Local builds (the first case) also get FredDevTools = true in Info.plist: only then does
+# Fred open its control socket (fredctl), which can read contacts and clipboard history
+# with Fred's privacy grants. Released builds never have it.
 set -euo pipefail
 
 CONFIG="$1"
@@ -43,6 +46,7 @@ sign=(codesign --force --options runtime --entitlements "$ROOT/Resources/Fred.en
       --identifier dev.fred.Fred)
 case "${FRED_SIGN_IDENTITY:-}" in
   "")
+    /usr/libexec/PlistBuddy -c "Add :FredDevTools bool true" "$PLIST"
     security unlock-keychain -p "$(cat "$PASS_FILE")" "$KC"
     "${sign[@]}" --sign "Fred Local Signing" --keychain "$KC" "$OUT" ;;
   -)
