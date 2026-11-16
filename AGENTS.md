@@ -110,7 +110,8 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool). The user puts them
   there with `scripts/store-release-secrets.sh <.p12> <AuthKey_ID.p8> <issuer>`: it asks
   for the .p12 password, checks the identity imports and notarytool accepts the key, then
-  writes the JSON. Rerun it to rotate (Developer ID certificates last five years).
+  writes the JSON. Rerun it with a new certificate before the current one expires (the
+  first: 2027-12-16); releases already signed and notarized keep working after that.
 - Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
   Fred once its executable is a different file.

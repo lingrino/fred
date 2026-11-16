@@ -9,7 +9,8 @@
 # comes from the file name Apple gives it (FRED_API_KEY_ID overrides). Both are checked the
 # way the release workflow uses them before anything is stored: the .p12 imports into a
 # scratch keychain as a Developer ID identity, and notarytool accepts the key.
-# Run it again to rotate: Developer ID certificates last five years.
+# Run it again with a new certificate before the current one expires (it prints the date;
+# releases already signed and notarized keep working after that).
 set -euo pipefail
 
 usage="usage: $0 <cert.p12> <AuthKey_KEYID.p8> <issuer-id>"
@@ -35,7 +36,8 @@ security create-keychain -p "$(openssl rand -hex 16)" "$KC"
 security import "$P12" -k "$KC" -P "$PW" -T /usr/bin/codesign >/dev/null
 ident="$(security find-identity -p codesigning "$KC" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
 [[ -n "$ident" ]] || { echo "$(basename "$P12") has no Developer ID Application identity" >&2; exit 1; }
-echo "certificate: $ident"
+expires="$(security find-certificate -c "$ident" -p "$KC" | openssl x509 -noout -enddate | cut -d= -f2)"
+echo "certificate: $ident, expires $expires"
 
 # Notarization key: any authenticated notarytool call proves it.
 if ! xcrun notarytool history --key "$P8" --key-id "$KEY_ID" --issuer "$ISSUER" >/dev/null; then
