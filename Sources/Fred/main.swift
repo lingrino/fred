@@ -24,8 +24,29 @@ final class FredApplication: NSApplication {
     static var eventTime: Double = 0
 }
 
+/// One Fred per user: a second process (a dev binary run directly, a second copy of the
+/// app) would append to the same logs and fight over the hotkeys. The lock is held for the
+/// life of the process; a restart overlapping the old process's exit waits for it.
+enum SingleInstance {
+    static func acquire() -> Bool {
+        let fd = open(Engine.dataDir.appendingPathComponent("fred.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return true }   // can't lock: run anyway rather than not at all
+        for _ in 0..<60 {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return true }
+            usleep(50_000)
+        }
+        close(fd)
+        return false
+    }
+}
+
 // Entry point. No NIB, no storyboard, no NSApplicationMain: the fewer moving parts
 // between exec and a ready hotkey, the faster cold start is.
+signal(SIGPIPE, SIG_IGN)   // a vanished socket peer is an error return, never a crash
+guard SingleInstance.acquire() else {
+    Log.error("another Fred is already running; exiting")
+    exit(0)
+}
 let app = FredApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

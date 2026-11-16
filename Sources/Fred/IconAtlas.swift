@@ -9,7 +9,8 @@ import FredCore
 /// list changes (≈3 ms/icon single-threaded → a few tens of ms total); static symbol
 /// icons (commands, bookmarks, contacts, calculator) occupy the first slots.
 ///
-/// Not a cache: it is part of the index, rebuilt wholesale with it, never invalidated.
+/// Not a cache: it is part of the index, rebuilt wholesale when the app or pane list
+/// changes (or an app's Info.plist does: an in-place update may bring a new icon).
 final class IconAtlas: @unchecked Sendable {
     static let px = 64                  // slot size in pixels (32 pt @2x)
     static let columns = 16

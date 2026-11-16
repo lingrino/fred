@@ -51,6 +51,23 @@ import Testing
         #expect(c("sign in") == nil)
     }
 
+    @Test func reviewEdges() {
+        // 2026-11-16 review: a comma that isn't a thousands separator isn't ignored.
+        #expect(c("1,5 km") == nil)
+        #expect(c("1,500 m in km") == "1.5 km")
+        // Lowercase kb/s, mb/s, gb/s are all bytes per second (like kb, mb, gb).
+        #expect(c("8000 kb/s in mb/s") == "8 MB/s")
+        #expect(c("1000 Kb/s in Mb/s") == "1 Mbps")       // capital K/M + b = bits
+        // A number glued to a one-letter unit is usually a search ("4K…", "3D…").
+        #expect(c("4k") == nil)
+        #expect(c("3d") == nil)
+        #expect(c("24h") == nil)
+        #expect(c("2m") == nil)
+        #expect(c("3 d") == "72 h")
+        #expect(c("2m in ft") == "6.56168 ft")
+        #expect(c("72F") == "22.2222 °C")                  // temperatures still work
+    }
+
     @Test func formatting() {
         #expect(Converter.format(9.9999996, grouping: true) == "10")          // rounding carries
         #expect(Converter.format(-40, grouping: true) == "-40")

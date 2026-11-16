@@ -25,6 +25,7 @@ import Testing
 
     @Test func persistReplayDeletePrune() {
         let dir = tmpDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
         let t: UInt32 = 1_800_000_000
         do {
             let s = ClipStore(dir: dir, now: t)

@@ -1,40 +1,40 @@
-search "f"	6375
-search "ch"	12166
-search "chr"	12250
-search "sys set"	19125
-search "goo cal"	9666
-search "vsc"	7250
-search "settngs"	21208
-search "a"	12875
-search "e"	10500
-search "re"	18541
-search "rea"	18583
-search "mes"	8458
-search "zzz"	5292
-search "x"	4375
-search "system settings"	7750
-search "activity"	4625
-search "term"	10833
-search "kel"	11750
-search "co"	12458
-search "ma"	10500
-Matcher.Query	167
+search "f"	6042
+search "ch"	5458
+search "chr"	4709
+search "sys set"	21708
+search "goo cal"	7459
+search "vsc"	8459
+search "settngs"	19500
+search "a"	12667
+search "e"	7458
+search "re"	19250
+search "rea"	24708
+search "mes"	9500
+search "zzz"	7125
+search "x"	3917
+search "system settings"	7125
+search "activity"	4000
+search "term"	8291
+search "kel"	4958
+search "co"	14209
+search "ma"	10542
+Matcher.Query	125
 clip ""	250
-clip "kube"	3792
-clip "example deploy"	21042
-clip "zzzz"	2083
-clip "résumé"	49750
-clip "e"	4125
-calculator	3459
+clip "kube"	5875
+clip "example deploy"	13667
+clip "zzzz"	2125
+clip "résumé"	18750
+clip "e"	6167
+calculator	3500
 converter "safari"	42
 converter "time machine"	334
-converter "2fold"	375
-converter "macos 27"	209
-converter "5 km in mi"	1166
-converter "1 GiB to MB"	1167
-converter "100 mbps in MB/s"	1292
+converter "2fold"	291
+converter "macos 27"	208
+converter "5 km in mi"	1042
+converter "1 GiB to MB"	1042
+converter "100 mbps in MB/s"	1166
 converter "72 f"	792
 converter "90 min"	875
-converter "3pm pst in tokyo"	5583
-converter "tokyo time"	4917
-converter "now in london"	5209
+converter "3pm pst in tokyo"	5167
+converter "tokyo time"	4875
+converter "now in london"	5125

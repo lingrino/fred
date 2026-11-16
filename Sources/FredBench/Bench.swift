@@ -1,9 +1,12 @@
 import FredCore
 import Foundation
 
-/// Search micro-benchmarks over this Mac's real catalog plus synthetic bookmarks/contacts
-/// (so the index is heavier than today's: worst-case thinking). Runs at user-interactive
-/// QoS (P-cores), warms up, reports min/p50/p99 per query.
+/// Search micro-benchmarks. The baselined numbers run over a synthetic, seeded catalog
+/// shaped like a heavy real one (apps, settings panes with sub-settings, commands, 3,000
+/// bookmarks, 1,500 contacts), so installing an app or an OS update doesn't move them;
+/// the same queries over this Mac's real catalog are printed after, for reference only.
+/// Runs at user-interactive QoS (P-cores), warms up, reports min/p50/p99 per query.
+/// Each section has its own RNG seed, so no section's input depends on another's.
 enum Bench {
     /// (name, p50 ns) of every benchmark, in print order; compared with / saved to the
     /// committed baseline (`make bench` / `make bench-save`).
@@ -50,20 +53,47 @@ enum Bench {
         print(flagged == 0 ? "no regressions" : "\(flagged) regression(s) — rerun to rule out noise")
     }
 
+    static let queries = ["f", "ch", "chr", "sys set", "goo cal", "vsc", "settngs", "a", "e", "re", "rea", "mes", "zzz", "x",
+                          "system settings", "activity", "term", "kel", "co", "ma"]
+
     static func runAll() {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
         var rng = SplitMix(seed: 42)
-
-        let t0 = DispatchTime.now().uptimeNanoseconds
-        var items = AppScanner.items(AppScanner.scan()) + SettingsScanner.items(SettingsScanner.scan()) + Command.items()
-        let realCount = items.count
-        items += syntheticBookmarks(3000, &rng) + syntheticContacts(1500, &rng)
         let t1 = DispatchTime.now().uptimeNanoseconds
-        let catalog = Catalog(items)
+        let catalog = Catalog(syntheticApps(250, &rng) + syntheticSettings(45, subsettings: 650, &rng) + Command.items()
+                              + syntheticBookmarks(3000, &rng) + syntheticContacts(1500, &rng))
         let t2 = DispatchTime.now().uptimeNanoseconds
-        print("catalog: \(realCount) real + \(items.count - realCount) synthetic items, \(catalog.index.count) entries, \(catalog.index.byteCount) bytes")
-        print(String(format: "  scan %.1f ms, build index %.2f ms", Double(t1 - t0) / 1e6, Double(t2 - t1) / 1e6))
+        print("synthetic catalog: \(catalog.count) items, \(catalog.index.count) entries, \(catalog.index.byteCount) bytes")
+        print(String(format: "  build index %.2f ms", Double(t2 - t1) / 1e6))
+        searchBench(catalog, record: true)
 
+        // Query construction (per keystroke) on its own.
+        var qs: [UInt64] = []
+        for _ in 0..<5000 {
+            let a = DispatchTime.now().uptimeNanoseconds
+            let q = Matcher.Query("sys set")
+            let b = DispatchTime.now().uptimeNanoseconds
+            blackHole(q.count)
+            qs.append(b - a)
+        }
+        qs.sort()
+        record("Matcher.Query", qs)
+        print("Matcher.Query(\"sys set\"): p50 \(fmt(qs[qs.count / 2]))")
+
+        var crng = SplitMix(seed: 7)
+        clipBench(&crng)
+        calcBench()
+        converterBench()
+
+        let t3 = DispatchTime.now().uptimeNanoseconds
+        let real = Catalog(AppScanner.items(AppScanner.scan()) + SettingsScanner.items(SettingsScanner.scan()) + Command.items())
+        let t4 = DispatchTime.now().uptimeNanoseconds
+        print("\nthis Mac's catalog (not baselined): \(real.count) items, \(real.index.count) entries, scan + index \(String(format: "%.1f", Double(t4 - t3) / 1e6)) ms")
+        searchBench(real, record: false)
+    }
+
+    static func searchBench(_ catalog: Catalog, record save: Bool) {
+        var rng = SplitMix(seed: 99)
         let searcher = Searcher(catalog)
         let learn = Learning(logURL: nil)
         // Some learning history so boosts are exercised.
@@ -75,8 +105,6 @@ enum Bench {
         }
         learn.prepare(catalog: catalog, into: searcher, now: now)
 
-        let queries = ["f", "ch", "chr", "sys set", "goo cal", "vsc", "settngs", "a", "e", "re", "rea", "mes", "zzz", "x",
-                       "system settings", "activity", "term", "kel", "co", "ma"]
         print("\nsearch (k=5, with learning), µs per query:")
         print("query                min     p50     p99")
         var total: [UInt64] = []
@@ -93,28 +121,11 @@ enum Bench {
             }
             samples.sort()
             total += samples
-            record("search \"\(q)\"", samples)
+            if save { record("search \"\(q)\"", samples) }
             print(pad(q, 18), fmt(samples[0]), fmt(samples[samples.count / 2]), fmt(samples[samples.count * 99 / 100]))
         }
         total.sort()
         print("all queries: p50 \(fmt(total[total.count / 2]))  p99 \(fmt(total[total.count * 99 / 100]))")
-
-        // Query construction (per keystroke) on its own.
-        var qs: [UInt64] = []
-        for _ in 0..<5000 {
-            let a = DispatchTime.now().uptimeNanoseconds
-            let q = Matcher.Query("sys set")
-            let b = DispatchTime.now().uptimeNanoseconds
-            blackHole(q.count)
-            qs.append(b - a)
-        }
-        qs.sort()
-        record("Matcher.Query", qs)
-        print("Matcher.Query(\"sys set\"): p50 \(fmt(qs[qs.count / 2]))")
-
-        clipBench(&rng)
-        calcBench()
-        converterBench()
     }
 
     static func clipBench(_ rng: inout SplitMix) {
@@ -179,6 +190,47 @@ enum Bench {
             record("converter \"\(q)\"", samples)
             print(pad("\"\(q)\"", 22), fmt(samples[0]), fmt(samples[samples.count / 2]), fmt(samples[samples.count * 99 / 100]))
         }
+    }
+
+    static let appWords = ["Goober", "Chroma", "Vivid", "Story", "Composer", "Studio", "Pixel", "Note", "Notes", "Code",
+                           "Terminal", "Mail", "Music", "Photo", "Photos", "Calendar", "Settings", "System", "Monitor",
+                           "Activity", "Disk", "Utility", "Sync", "Cloud", "Drive", "Office", "Sheets", "Writer", "Draw",
+                           "Kelp", "Mesa", "Zephyr", "Tally", "Vector", "Script", "Editor", "Viewer", "Player", "Maps"]
+
+    /// Apps with display names, file-name and CFBundleName aliases.
+    static func syntheticApps(_ n: Int, _ rng: inout SplitMix) -> [Catalog.Item] {
+        (0..<n).map { i in
+            let k = Int(rng.next() % 3) + 1
+            let name = (0..<k).map { _ in appWords[Int(rng.next() % UInt64(appWords.count))] }.joined(separator: " ")
+            let aliases = rng.next() % 3 == 0 ? [name.replacingOccurrences(of: " ", with: "") + "\(i % 7)"] : []
+            return Catalog.Item(kind: .app, title: name, aliases: aliases, payload: "/Applications/App\(i).app", key: UInt64(i))
+        }
+    }
+
+    /// Panes with search terms, plus sub-settings (weak, with a detail and keywords) spread
+    /// over them, like SettingsScanner produces.
+    static func syntheticSettings(_ panes: Int, subsettings: Int, _ rng: inout SplitMix) -> [Catalog.Item] {
+        let words = ["Display", "Displays", "Sound", "Keyboard", "Trackpad", "Mouse", "Network", "Battery", "Privacy",
+                     "Security", "Appearance", "Desktop", "Dock", "Wallpaper", "Screen", "Saver", "Time", "Notifications",
+                     "Focus", "Sharing", "General", "Login", "Items", "Accessibility", "Zoom", "Contrast", "Night", "Shift",
+                     "True", "Tone", "Resolution", "Brightness", "Volume", "Input", "Output", "Language", "Region", "Siri",
+                     "Spotlight", "Control", "Center", "Bluetooth", "Wi-Fi", "Energy", "Hot", "Corners", "Dark", "Mode"]
+        func phrase(_ n: Int) -> String { (0..<n).map { _ in words[Int(rng.next() % UInt64(words.count))] }.joined(separator: " ") }
+        var out: [Catalog.Item] = []
+        var paneNames: [String] = []
+        for p in 0..<panes {
+            let name = phrase(Int(rng.next() % 2) + 1)
+            paneNames.append(name)
+            out.append(.init(kind: .settings, title: name, payload: "pane\(p)",
+                             weakKeywords: (0..<Int(rng.next() % 6)).map { _ in phrase(Int(rng.next() % 2) + 1) }))
+        }
+        for s in 0..<subsettings {
+            let pane = Int(rng.next() % UInt64(panes))
+            out.append(.init(kind: .settings, title: phrase(Int(rng.next() % 3) + 1), payload: "pane\(pane)#\(s)",
+                             detail: paneNames[pane], weak: true,
+                             weakKeywords: (0..<Int(rng.next() % 5)).map { _ in phrase(Int(rng.next() % 3) + 1) }))
+        }
+        return out
     }
 
     static func syntheticBookmarks(_ n: Int, _ rng: inout SplitMix) -> [Catalog.Item] {

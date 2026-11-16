@@ -13,6 +13,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var timer: Timer?
     private var lastCPU: (cpu: Double, wall: Double)?
+    private var ticks = 0
     /// The app that was in front before the window opened; it gets focus back on close
     /// (Fred is an accessory app — with no window of its own left, nothing else would).
     private var previousApp: NSRunningApplication?
@@ -27,7 +28,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         (.contacts, "Contacts", "Search contacts", "Privacy_Contacts"),
         (.postEvents, "Accessibility", "Paste and type into your apps", "Privacy_Accessibility"),
         (.pasteboard, "Paste from Other Apps", "Clipboard history", "Privacy_Pasteboard"),
-        (.chromeData, "Full Disk Access", "Chrome bookmarks", "Privacy_AllFiles"),
+        (.chromeData, "Full Disk Access", "Chrome bookmarks", "Privacy_AllFiles"),   // what this Mac uses
         (.finder, "Automation → Finder", "Empty Trash", "Privacy_Automation"),
         (.loginwindow, "Automation → loginwindow", "Sleep, Restart, Shut Down", "Privacy_Automation"),
     ]
@@ -47,7 +48,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         timer?.invalidate()
-        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.refresh() } }
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Automation grants can't be read on main (see Permissions): re-check them
+                // in the background every few seconds so a grant given now shows up.
+                self.ticks += 1
+                if self.ticks % 5 == 0 { Permissions.refreshAutomation(ask: false) }
+                self.refresh()
+            }
+        }
         t.tolerance = 0.2
         RunLoop.main.add(t, forMode: .common)
         timer = t
@@ -205,7 +215,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 final class SettingsWindow: NSWindow {
     override func cancelOperation(_ sender: Any?) { close() }
     override func performKeyEquivalent(with e: NSEvent) -> Bool {
-        if e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, e.charactersIgnoringModifiers == "w" {
+        if FloatingPanel.modifiers(e) == .command, e.charactersIgnoringModifiers == "w" {
             close(); return true
         }
         return super.performKeyEquivalent(with: e)

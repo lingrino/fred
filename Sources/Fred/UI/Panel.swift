@@ -1,11 +1,13 @@
 import AppKit
+import Carbon.HIToolbox
 
 /// Shared look for Fred's floating panels (launcher and clipboard).
 ///
 /// A borderless, non-activating NSPanel: it becomes key (gets the keyboard) without
 /// activating Fred, so the app you were in stays frontmost — which is exactly what
 /// paste-into-front-app needs, and avoids an app activation on every show.
-/// Built once at launch and kept alive; showing is just `orderFront`.
+/// Built once at launch and kept alive, ordered in (parked) the whole time; showing is
+/// alpha 1 + becoming key (`present`).
 @MainActor
 class FloatingPanel: NSPanel {
     /// UI lives here, above the glass (not inside it), so glass changes never touch it.
@@ -67,15 +69,6 @@ class FloatingPanel: NSPanel {
     /// Never key while parked: an invisible key window would swallow the user's typing.
     override var canBecomeKey: Bool { shown }
 
-    /// Plain key-downs go straight to the query field's fast path, skipping NSWindow's
-    /// dispatch (key-equivalent scans, input-context setup): ~100 µs per keystroke.
-    /// ⌘-combos still take the normal route so performKeyEquivalent sees them first.
-    override func sendEvent(_ e: NSEvent) {
-        if e.type == .keyDown, !e.modifierFlags.contains(.command),
-           let f = firstResponder as? QueryField, f.handleFast(e) { return }
-        super.sendEvent(e)
-    }
-
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if let h = keyHandler, h(event) { return true }
         if Self.editingKeyEquivalent(event) { return true }
@@ -83,9 +76,9 @@ class FloatingPanel: NSPanel {
     }
 
     /// Fred has no Edit menu, which is what normally maps ⌘A/⌘C/⌘X/⌘V/⌘Z to the focused
-    /// text field. Route them to the first responder (the field editor) ourselves.
+    /// text field. Route them to the first responder (the QueryField) ourselves.
     static func editingKeyEquivalent(_ e: NSEvent) -> Bool {
-        let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let mods = modifiers(e)
         guard mods == .command || mods == [.command, .shift], let ch = e.charactersIgnoringModifiers?.lowercased() else { return false }
         let sel: Selector? = switch (ch, mods.contains(.shift)) {
         case ("a", false): #selector(NSText.selectAll(_:))
@@ -100,6 +93,28 @@ class FloatingPanel: NSPanel {
         return NSApp.sendAction(sel, to: nil, from: nil)
     }
     override var canBecomeMain: Bool { false }
+
+    /// ⌘ ⌥ ⌃ ⇧ only: Caps Lock, Fn and the keypad flag must not break `== .command`.
+    static func modifiers(_ e: NSEvent) -> NSEvent.ModifierFlags {
+        e.modifierFlags.intersection([.command, .option, .control, .shift])
+    }
+
+    /// 1…9 for the digit keys of the top row or keypad, by physical key: ⌘1…⌘9 work on
+    /// any layout (on AZERTY the top row types & é " … without Shift).
+    static func digit(_ e: NSEvent) -> Int? {
+        switch Int(e.keyCode) {
+        case kVK_ANSI_1, kVK_ANSI_Keypad1: 1
+        case kVK_ANSI_2, kVK_ANSI_Keypad2: 2
+        case kVK_ANSI_3, kVK_ANSI_Keypad3: 3
+        case kVK_ANSI_4, kVK_ANSI_Keypad4: 4
+        case kVK_ANSI_5, kVK_ANSI_Keypad5: 5
+        case kVK_ANSI_6, kVK_ANSI_Keypad6: 6
+        case kVK_ANSI_7, kVK_ANSI_Keypad7: 7
+        case kVK_ANSI_8, kVK_ANSI_Keypad8: 8
+        case kVK_ANSI_9, kVK_ANSI_Keypad9: 9
+        default: nil
+        }
+    }
 
     override func resignKey() {
         super.resignKey()
@@ -128,6 +143,7 @@ class FloatingPanel: NSPanel {
     /// Invisible, not key, still ordered in so its layers (and the glass) stay rendered.
     func park() {
         shown = false
+        (firstResponder as? QueryField)?.stopBlink()
         if isKeyWindow || isVisible { orderOut(nil) }   // gives key focus back
         alphaValue = 0
         ignoresMouseEvents = true
@@ -138,7 +154,9 @@ class FloatingPanel: NSPanel {
     /// screen under the mouse; the glass starts at the top and grows downward.
     func position(height: CGFloat) {
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+        // No screen at all (lid closed, no display): keep the last position.
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
+                ?? NSScreen.screens.first else { setHeight(height); return }
         let f = screen.visibleFrame
         let top = f.maxY - f.height * Theme.topFraction
         setFrameOrigin(NSPoint(x: (f.midX - frame.width / 2).rounded(), y: (top - maxHeight).rounded()))

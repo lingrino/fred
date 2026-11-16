@@ -6,13 +6,15 @@ import FredCore
 /// Keeps the catalog fresh.
 ///
 /// Each source is re-read in full when it changes — every source is cheap enough that
-/// diffing would only add bugs (apps ~40 ms, panes ~20 ms, bookmarks ~1 ms, contacts
-/// tens of ms). Change signals: FSEvents on app roots and Chrome profile dirs, the
+/// diffing would only add bugs (apps ~50 ms, panes ~50 ms, bookmarks ~1 ms, contacts
+/// ~180 ms). Change signals: FSEvents on the app roots and Chrome's directory, the
 /// Contacts change notification, and wake from sleep. Settings panes and commands only
-/// change with an OS update, so they are read once at launch.
+/// change with an OS update (which reboots), so they are read once at launch.
 ///
-/// After any source changes, a new immutable Catalog (with its search index) is built
-/// on the indexing queue and handed to `onCatalog` on the main thread.
+/// After a reload, a new immutable Catalog (with its search index) is built on the
+/// indexing queue and handed to `onCatalog` on the main thread — unless nothing changed:
+/// most signals (an app writing inside its own bundle, a wake) change nothing visible, and
+/// a swap costs a title-atlas rebuild and a re-render.
 final class Indexer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "fred.index", qos: .utility)
     private var apps: [Catalog.Item] = []
@@ -25,6 +27,8 @@ final class Indexer: @unchecked Sendable {
     var onCatalog: (@MainActor (Catalog, [AppScanner.App], [SettingsScanner.Pane]) -> Void)?
     private var appList: [AppScanner.App] = []
     private var paneList: [SettingsScanner.Pane] = []
+    /// What the last published catalog was built from (nil before the first).
+    private var published: (items: [Catalog.Item], apps: [AppScanner.App])?
     /// Called on main when something inside Fred's own bundle changed on disk (an upgrade
     /// replacing it); the app roots are watched anyway, so this costs nothing extra.
     var onSelfChanged: (@MainActor () -> Void)?
@@ -44,7 +48,9 @@ final class Indexer: @unchecked Sendable {
             self?.schedule(.contacts)
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.schedule(.all)
+            // Anything may have changed while asleep (another Mac's sync, an update);
+            // panes can't without a reboot.
+            for s in [Source.apps, .bookmarks, .contacts] { self?.schedule(s) }
         }
     }
 
@@ -100,7 +106,13 @@ final class Indexer: @unchecked Sendable {
         if let p = r.panes { paneList = p; panes = SettingsScanner.items(p) }
         if let b = r.bookmarks { bookmarks = b }
         if let c = r.contacts { contacts = c }
-        let catalog = Catalog(apps + panes + Command.items() + bookmarks + contacts)
+        let items = apps + panes + Command.items() + bookmarks + contacts
+        if let p = published, p.items == items, p.apps == appList {
+            Log.info("index \(set): unchanged in \(String(format: "%.1f", Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)) ms")
+            return
+        }
+        published = (items, appList)
+        let catalog = Catalog(items)
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
         Log.info("index \(set): \(apps.count) apps, \(panes.count) panes, \(bookmarks.count) bookmarks, \(contacts.count) contacts, \(catalog.index.count) entries in \(String(format: "%.1f", ms)) ms (apps \(Int(r.ms0)), panes \(Int(r.ms1)), bookmarks \(Int(r.ms2)), contacts \(Int(r.ms3)) ms)")
         let al = appList, pl = paneList
