@@ -35,9 +35,11 @@ first, Fred keeps retrying and takes over as soon as they're free.
 
 ## Build
 
-Command Line Tools only (no Xcode). `make install` builds, signs with the local identity
-and installs to /Applications. `make test`, `make bench`. Details for the maintainer
-(architecture, measurements, rules) are in [AGENTS.md](AGENTS.md).
+Xcode 27 or the Command Line Tools (SwiftPM, no Xcode project). `make install` builds,
+signs with a local self-signed identity and installs to /Applications. `make test`,
+`make bench`. Every PR runs lint and tests in GitHub Actions, and every merge to main is
+built as release 0.0.N. Details for the maintainer (architecture, measurements, rules)
+are in [AGENTS.md](AGENTS.md).
 
 Data lives in `~/Library/Application Support/Fred/` (learning log, clipboard log, images).
 

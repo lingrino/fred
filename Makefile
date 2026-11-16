@@ -1,4 +1,5 @@
-# Fred build entry points. Everything goes through SwiftPM + Command Line Tools; no Xcode.
+# Fred build entry points. Everything goes through SwiftPM via scripts/swift.sh (Xcode or
+# the Command Line Tools; no Xcode project).
 #   make            build release .app into build/Fred.app
 #   make install    build, copy to /Applications, (re)launch
 #   make test       run unit tests (debug build, all runtime checks on)
@@ -8,6 +9,7 @@
 #   make smoke      live checks against the running app (no focus change)
 #   make check      lint + test + smoke: before every commit, and first thing after a break
 #   make debug-app  debug .app (checks on) into build/Fred-debug.app
+#   make release    what CI publishes: build/release/Fred-<version>.zip + fred.rb (scripts/release.sh)
 
 APP        := build/Fred.app
 INSTALLED  := /Applications/Fred.app
@@ -15,7 +17,7 @@ SIGN_ID    := Fred Local Signing
 KEYCHAIN   := $(HOME)/Library/Keychains/fred-signing.keychain-db
 KC_PASS    := $(HOME)/Library/Application Support/FredDev/keychain-password
 
-.PHONY: all app install run test bench bench-save lint smoke check clean signing debug-app dev
+.PHONY: all app install run test bench bench-save lint smoke check clean signing debug-app dev release
 
 all: app
 
@@ -46,7 +48,7 @@ dev: app
 	open -a "$(INSTALLED)" --args --regular
 
 test:
-	./scripts/swift.sh test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
+	./scripts/swift.sh test
 
 bench:
 	./scripts/swift.sh build -c release --product fredbench
@@ -65,6 +67,11 @@ smoke:
 	@./scripts/smoke.sh
 
 check: lint test smoke
+
+# Locally this signs with the self-signed identity and skips notarization (no Apple
+# credentials here); CI signs with Developer ID and notarizes when its secrets exist.
+release: signing
+	./scripts/release.sh
 
 clean:
 	rm -rf .build build

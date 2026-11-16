@@ -1,0 +1,49 @@
+name: validate
+
+# Pre-merge checks; the main ruleset requires lint, test and scripts. `make smoke` and the
+# on-screen checks need the installed app and its privacy grants, so they stay local.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: validate-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: xcode-27
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+      - name: toolchain
+        run: sw_vers && swift --version
+      - name: lint
+        run: make lint
+
+  test:
+    runs-on: xcode-27
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the bundle version counts commits
+      - name: test
+        run: make test
+      - name: release dry run
+        run: scripts/release.sh
+        env:
+          FRED_SIGN_IDENTITY: "-"
+      - name: check cask
+        run: brew style --only-cops Cask build/release/fred.rb # outside a tap, only the cask rules apply
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+      - name: shellcheck
+        run: shellcheck scripts/*.sh scripts/fredctl
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color

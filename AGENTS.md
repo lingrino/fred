@@ -13,15 +13,17 @@ when there is no CLAUDE.md, so don't add one: a CLAUDE.md here would shadow this
 Development is at a slow pace since 2026-11-15: features are done, Fred is in daily use.
 To pick it up again:
 1. Read this file, `git log --oneline -20`, and the memory notes. Check "Open decisions".
-2. `sw_vers; swift --version`: if macOS or the Command Line Tools changed, read
+2. `sw_vers; swift --version`: if macOS, Xcode or the Command Line Tools changed, read
    "What OS/toolchain updates can break" below before anything else.
 3. `make check` (zero-warning build, unit tests, live smoke test against the installed
    app; no focus stealing). Fix what it reports before new work.
 4. `make bench`: compares with `Benchmarks/baseline.tsv`, flags ≥20% & ≥0.5 µs slower
    (rerun once; medians wobble). `fredctl stats` shows the user's real latency. When the
    user is idle: `fredctl live run` and `fredctl hotkeybench 30` (on-screen checks).
-5. Work → test of the right kind (see "Testing") → `make check` → `make install` → commit.
-   If a benchmark moves on purpose, `make bench-save` and say why in the commit.
+5. Branch → work → test of the right kind (see "Testing") → `make check` → `make install`
+   → commit → PR. CI must pass; the PR is squash-merged, and every merge to main is a
+   release (see "CI and releases"). If a benchmark moves on purpose, `make bench-save` and
+   say why in the commit.
 
 ## What it does (and deliberately doesn't)
 
@@ -65,6 +67,7 @@ make dev           # release build → /Applications/Fred.app, relaunch with --r
 make install       # same, as the user runs it (accessory app, no Dock icon)
 make bench         # FredBench over the real catalog, Δ vs Benchmarks/baseline.tsv
 make bench-save    # …and make this run the baseline
+make release       # what CI publishes (build/release/: zip + cask), self-signed locally
 scripts/fredctl …  # talk to the running app (see "Control socket")
 ```
 
@@ -79,20 +82,46 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
 - Looks: `fredctl snapshot <png> <q>`, `card <png> <q>`, `settings <png>`, then view the PNG.
 - Focus/typing/hotkeys (can't be automated without taking the screen): computer use,
   only when the user is idle (see "Control socket").
-- No formatter/linter beyond the compiler: style is consistent by hand and a reformat
-  would bury `git blame`. Zero warnings is the rule (`make lint`).
+- No Swift formatter/linter beyond the compiler: style is consistent by hand and a
+  reformat would bury `git blame`. Zero warnings is the rule (`make lint`). Shell scripts
+  pass shellcheck, workflows actionlint (both in CI).
 
-Toolchain quirks on this machine (Command Line Tools only, no Xcode):
-- `scripts/swift.sh` wraps `swift`: the CLT ships stale Feb-2024
-  `PackageDescription *.private.swiftinterface` files that break every manifest; the
-  wrapper points SwiftPM at a clean copy (`SWIFTPM_CUSTOM_LIBS_DIR`). Delete it when a
-  plain `swift build` works.
-- Tests need `-Xswiftc -plugin-path …/host/plugins/testing` (in the Makefile) because the
-  default build system doesn't find the swift-testing macro plugin.
-- `codesign` uses a self-signed identity ("Fred Local Signing") in a dedicated keychain
-  (`scripts/setup-signing.sh`, password in `~/Library/Application Support/FredDev/`).
-  This keeps the designated requirement stable so the user's privacy grants survive
-  rebuilds. Never switch to ad-hoc signing or change the bundle id `dev.fred.Fred`.
+### CI and releases (`.github/workflows`)
+- `validate`, on every PR. The main ruleset requires a PR (no direct pushes, no force
+  pushes) and its `lint`, `test` and `scripts` jobs: `make lint`; `make test` plus a
+  release dry run (ad-hoc signed) and `brew style` on the generated cask; shellcheck and
+  actionlint. Runner label `xcode-27`: GitHub's macOS 27 arm64 image (images are named
+  by Xcode major). `make smoke` and the on-screen checks need the installed app and its
+  grants, so they stay local: `make check` before opening a PR.
+- `review`: Claude reviews each PR (anthropics/claude-code-action).
+- `release`, on every push to main: version 0.0.N, N = commits on main (squash merges, so
+  every merge bumps it; `scripts/bundle.sh` stamps it into the bundle with the git hash
+  as `FredRevision`). `scripts/release.sh` builds, signs, notarizes (API key), staples,
+  zips and writes the cask. With the Apple secrets it publishes GitHub release `v0.0.N`
+  and, while the repo is public, `Casks/fred.rb` in lingrino/homebrew-tap; without them
+  it keeps the ad-hoc zip as a run artifact only.
+- Secrets come from Terraform in lingrino/infra: `HOMEBREW_TAP_GITHUB_TOKEN`, and from
+  AWS Secrets Manager `github/keys/fred`: `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`
+  (Developer ID Application certificate), `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`,
+  `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool).
+- Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
+  Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
+  Fred once its executable is a different file.
+- Renovate keeps action versions current (`renovate.json`).
+
+Toolchain (Xcode 27 is active on this Mac since 2026-11, and in CI):
+- `scripts/swift.sh` wraps `swift`. With Xcode active it is plain `swift`. With only the
+  Command Line Tools active it works around two CLT bugs seen 2026-11-14: stale Feb-2024
+  `PackageDescription *.private.swiftinterface` files that broke every manifest (SwiftPM
+  gets a clean copy via `SWIFTPM_CUSTOM_LIBS_DIR`), and the swift-testing macro plugin
+  not being found (test builds get `-plugin-path`). Check that branch with
+  `DEVELOPER_DIR=/Library/Developer/CommandLineTools scripts/swift.sh test --scratch-path <dir>`.
+- Local builds are signed with a self-signed identity ("Fred Local Signing") in a
+  dedicated keychain (`scripts/setup-signing.sh`, password in
+  `~/Library/Application Support/FredDev/`). This keeps the designated requirement stable
+  so the user's privacy grants survive rebuilds. Never switch local builds to ad-hoc
+  signing or change the bundle id `dev.fred.Fred`. Releases are signed with the Developer
+  ID: moving a Mac between the two means granting every permission again, once.
 
 ## Privacy grants (user-only; check with `fredctl permissions`)
 
@@ -144,8 +173,9 @@ Sources/Fred/              the app
   ContactsSource / ContactCard / Permissions / LoginItem / HotKeys / ControlServer / Log
 Sources/FredBench/         `fredbench scan` (what sources find), `bench`, `save` (baseline)
 Benchmarks/baseline.tsv    p50 per benchmark (ns), compared by `make bench`
-scripts/                   swift.sh (toolchain wrapper), bundle.sh, setup-signing.sh, fredctl,
-                           lint.sh, smoke.sh, make-icon.swift
+scripts/                   swift.sh (toolchain wrapper), bundle.sh, release.sh, setup-signing.sh,
+                           fredctl, lint.sh, smoke.sh, make-icon.swift
+.github/workflows/         validate (PR checks), release (every merge to main), review
 ```
 
 Data flow: Indexer (utility queue) → `Catalog` (immutable, Sendable) → main → `Engine.setCatalog`
@@ -242,8 +272,8 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
   debugging a real-world ranking complaint: reproduce it with fictional names (Goober
   Chroma, Vivid Story Composer, iTally, Kermit Frog, `*.example` hosts). Apple's stock
   apps (Safari, Finder, System Settings…) are fine.
-  Push only `main`; other refs in this clone (e.g. `refs/codex/…` checkpoints) are
-  local tool state.
+  Push only branches for PRs (main takes PRs only); other refs in this clone (e.g.
+  `refs/codex/…` checkpoints) are local tool state.
 
 - Never execute Sleep/Restart/Shut Down/Lock/Empty Trash/Force Quit for testing — use
   `fredctl dryrun on` or launch with `FRED_DRY_RUN=1`.
@@ -263,14 +293,19 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 - Clipboard: `NSPasteboard.accessBehavior` ("Paste from Other Apps"); paste/typing via
   CGEvent (`CGPreflightPostEventAccess`). Hotkeys: Carbon `RegisterEventHotKey`.
 - Liquid Glass / `NSGlassEffectView` cost (re-measure with `fredctl hotkeybench 30` when idle).
-- Toolchain: the CLT stale-interface workaround (`scripts/swift.sh`), the testing plugin
-  path (Makefile), new compiler diagnostics (`make lint`). Signing keychain + password in
+- Toolchain: the CLT workarounds (`scripts/swift.sh`, only when the CLT is active), new
+  compiler diagnostics (`make lint`), the CI runner label (`xcode-27`: move to the next
+  Xcode major's label when GitHub ships it). Signing keychain + password in
   `~/Library/Application Support/FredDev/` — losing it means a new identity, and the user
   must re-grant every permission (one-way door: ask first).
 
 ## Open decisions
 
-None. (Resolved 2026-11-15: Liquid Glass is the only backdrop; numbers in "Latency notes".)
+- Releases build on every merge but aren't signed or published until the Developer ID
+  secrets exist (`github/keys/fred`); the repo goes public and the cask starts publishing
+  after that.
+
+(Resolved 2026-11-15: Liquid Glass is the only backdrop; numbers in "Latency notes".)
 
 ## Latency notes (measured 2026-11-14, M4 Max, macOS 27.2; `fredctl stats`)
 

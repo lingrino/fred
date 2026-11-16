@@ -4,11 +4,10 @@
 # (a file that warns never compiles "successfully"). Swift 6 concurrency warnings become
 # errors in newer language modes: fixing them now keeps a future toolchain building.
 set -uo pipefail
-cd "$(dirname "$0")/.."
-PLUGIN=/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
+cd "$(dirname "$0")/.." || exit 1
 for cfg in debug release; do
   extra=()
-  [[ $cfg == debug ]] && extra=(--build-tests -Xswiftc -plugin-path -Xswiftc "$PLUGIN")
+  [[ $cfg == debug ]] && extra=(--build-tests)
   if ! out=$(./scripts/swift.sh build -c "$cfg" --scratch-path .build/lint ${extra[@]+"${extra[@]}"} -Xswiftc -warnings-as-errors 2>&1); then
     echo "$out" | grep -E "^/.*(error|warning):" | sed "s|$PWD/||" | sort -u
     echo "lint: $cfg build failed (warnings are errors here)"

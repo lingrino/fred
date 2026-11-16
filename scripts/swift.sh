@@ -1,13 +1,21 @@
 #!/bin/bash
-# `swift` wrapper used by the Makefile.
+# `swift` wrapper used by the Makefile and scripts, so the same commands work with Xcode
+# (CI, and this Mac since 2026-11) and with the Command Line Tools alone.
 #
-# This machine's Command Line Tools ship stale (Feb 2024) PackageDescription
-# *.private.swiftinterface files that shadow the current API, so every manifest fails
-# to link. We keep a copy of the manifest/plugin API without those stale files and
-# point SwiftPM at it. Harmless when the toolchain is healthy; delete this wrapper
-# once `swift build` works without it.
+# With Xcode active it is plain `swift`. With the Command Line Tools active (xcode-select,
+# or DEVELOPER_DIR), it works around two CLT problems seen on 2026-11-14:
+# - the CLT shipped stale (Feb 2024) PackageDescription *.private.swiftinterface files
+#   that shadow the current API, so every manifest failed to link: SwiftPM gets a copy
+#   of the manifest/plugin API without them;
+# - SwiftPM didn't find the swift-testing macro plugin: test builds get its path.
+# Drop the CLT branch once a CLT-only `swift test` works without it.
 set -euo pipefail
-SRC=/Library/Developer/CommandLineTools/usr/lib/swift/pm
+CLT=/Library/Developer/CommandLineTools
+if [[ "${DEVELOPER_DIR:-$(xcode-select -p 2>/dev/null || true)}" != "$CLT" ]]; then
+  exec swift "$@"
+fi
+
+SRC=$CLT/usr/lib/swift/pm
 DST="$HOME/Library/Application Support/FredDev/swiftpm-libs"
 STAMP="$DST/.source-mtime"
 cur="$(stat -f %m "$SRC/ManifestAPI/libPackageDescription.dylib")"
@@ -19,4 +27,9 @@ if [[ ! -f "$STAMP" || "$(cat "$STAMP")" != "$cur" ]]; then
   echo "$cur" > "$STAMP"
 fi
 export SWIFTPM_CUSTOM_LIBS_DIR="$DST"
-exec swift "$@"
+
+args=("$@")
+if [[ "${1:-}" == test || " $* " == *" --build-tests "* ]]; then
+  args+=(-Xswiftc -plugin-path -Xswiftc "$CLT/usr/lib/swift/host/plugins/testing")
+fi
+exec swift "${args[@]}"
