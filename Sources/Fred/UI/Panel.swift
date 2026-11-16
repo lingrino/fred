@@ -176,7 +176,10 @@ enum DevMode {
 enum Theme {
     static let width: CGFloat = 680
     static let cornerRadius: CGFloat = 24
-    static let topFraction: CGFloat = 0.22
+    /// Top edge, as a fraction of the visible screen height below the menu bar. The user
+    /// asked for it higher on 2026-11-15: 0.135 puts it ~160 pt from the top of a 982 pt
+    /// screen (0.22 was ~240 pt).
+    static let topFraction: CGFloat = 0.135
     static let fieldHeight: CGFloat = 60
     nonisolated(unsafe) static let fieldFont = NSFont.systemFont(ofSize: 25, weight: .regular)
     static let rowHeight: CGFloat = 48
