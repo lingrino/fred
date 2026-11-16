@@ -33,7 +33,7 @@ enum LiveTests {
          l.keystrokeLatency, l.stRowsRender, l.stResize, l.stDisplay, l.stDraw, l.stFlush]
     }
 
-    /// "s" fills 5 rows, "sa"/"saf"/"safa" fewer: every keystroke can resize the backdrop.
+    /// "s" fills 5 rows, "sa"/"saf"/"safa" fewer: every keystroke can resize the glass.
     static let query = ["s", "a", "f", "a"]
 
     private static func cycle(_ l: Launcher, i: Int, n: Int) {
@@ -46,7 +46,7 @@ enum LiveTests {
     }
 
     private static func finishBench(_ l: Launcher) {
-        var out = "backdrop \(FloatingPanel.backdrop), \(l.showLatency.count) shows (µs: p50 p90 max)\n"
+        var out = "\(l.showLatency.count) shows (µs: p50 p90 max)\n"
         for x in logs(l) {
             guard let p50 = x.percentile(0.5), let p90 = x.percentile(0.9), let mx = x.percentile(1) else { continue }
             out += String(format: "  %-40@ %7.0f %7.0f %7.0f\n", x.name as NSString, Double(p50) / 1e3, Double(p90) / 1e3, Double(mx) / 1e3)

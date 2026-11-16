@@ -124,7 +124,7 @@ final class Launcher: NSObject, QueryFieldDelegate {
         panel.alphaValue = 0
         panel.position(height: panel.maxHeight)
         panel.orderFrontRegardless()
-        panel.warmBackdrop()
+        panel.warmGlass()
         for q in ["a", "ch", "sys set", "2+2"] {
             field.text = q
             queryChanged()

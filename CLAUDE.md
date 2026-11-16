@@ -128,7 +128,7 @@ Sources/Fred/              the app
   Indexer.swift            background reindex (sources in parallel) on FSEvents / Contacts change / wake
   IconAtlas.swift          all icons pre-rendered (parallel) into one bitmap; rows use sub-images
   TitleAtlas.swift         all catalog titles pre-rendered as A8 masks (rows = mask + color layer)
-  UI/Panel.swift           FloatingPanel: fixed-size non-activating window, backdrop (masked glass),
+  UI/Panel.swift           FloatingPanel: fixed-size non-activating window, Liquid Glass clipped by a mask,
                            present()/park() instead of order in/out; Theme constants; DevMode
   UI/QueryField.swift      custom single-line text input (fast path + NSTextInputClient for IME)
   UI/ResultList.swift      ResultList (NSView host) + RowLayer (pure CALayer row)
@@ -214,7 +214,7 @@ derivation orphans learned history — don't, or migrate.
 `stats` (incl. per-stage latency), `resetstats`, `permissions`, `request`, `query <q>` (also
 prints the instant-answer row and its µs), `settings [png]` (no arg: show the window — takes
 focus; with a path: render it offscreen),
-`snapshot <png> [q]` (renders the content layer tree offscreen — no glass/vibrancy — and
+`snapshot <png> [q]` (renders the content layer tree offscreen — no glass — and
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
 (visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
 `learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`,
@@ -258,7 +258,7 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 
 ## Open decisions
 
-None. (Resolved 2026-11-15: backdrop = masked Liquid Glass; numbers in "Latency notes".)
+None. (Resolved 2026-11-15: Liquid Glass is the only backdrop; numbers in "Latency notes".)
 
 ## Latency notes (measured 2026-11-14, M4 Max, macOS 27.2; `fredctl stats`)
 
@@ -284,9 +284,8 @@ What was measured and why the code looks the way it does — don't regress these
   change → one full-height glass view, never resized, clipped by a mask layer; panels are
   parked, not ordered out. On-screen A/B 2026-11-15 (`hotkeybench 30`, p50, five runs):
   ⌘Space→frame glass 5.3–6.4 ms vs vibrancy 3.4–3.6 ms (commit ~3 vs 0.7 ms); keystroke→
-  frame ~2 ms both. The user prefers glass at +2–2.5 ms (both < one 120 Hz frame); the
-  earlier "~10 ms" no longer reproduces. Fallback: `defaults write dev.fred.Fred
-  debugBackdrop vibrancy`.
+  frame ~2 ms both. The user chose glass at +2–2.5 ms (both < one 120 Hz frame); the
+  earlier "~10 ms" no longer reproduces. Vibrancy code was deleted (git history).
 - Ordering a window out discards its rendered state → panels are "parked" (ordered in,
   alpha 0, click-through, `canBecomeKey == false`) instead of ordered out.
 - Row text rasterized per keystroke ~150 µs → `TitleAtlas` (all titles pre-rendered as A8

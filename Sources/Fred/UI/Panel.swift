@@ -8,7 +8,7 @@ import AppKit
 /// Built once at launch and kept alive; showing is just `orderFront`.
 @MainActor
 class FloatingPanel: NSPanel {
-    /// UI lives here, above the backdrop (not inside it), so backdrop changes never touch it.
+    /// UI lives here, above the glass (not inside it), so glass changes never touch it.
     let content = FlippedView()
     var onResignKey: (() -> Void)?
     /// Sees ⌘-key equivalents first (⌘1…⌘9, ⌘↩, ⌘O…). Return true if handled.
@@ -16,24 +16,17 @@ class FloatingPanel: NSPanel {
 
     /// The window never changes size (resizing a window costs 1.3–2.6 ms: new backing
     /// store, window-server round trip): it is `maxHeight` tall and transparent, and only
-    /// the backdrop's visible height changes.
+    /// the glass's visible height changes.
     let maxHeight: CGFloat
     private let root = FlippedView()
-    private var backdropView: NSView!
-    /// Glass: the rounded mask that decides how much of the full-height glass shows.
-    private var glassMask: CALayer?
-
-    /// Backdrop, decided by an on-screen A/B on 2026-11-15 (`fredctl hotkeybench`, p50 of
-    /// 30 real ⌘Space shows each): Liquid Glass — one full-height NSGlassEffectView that
-    /// is never resized (resizing re-renders it, ~1 ms), clipped by a mask layer whose
-    /// height moves instead. Show 5.3–6.4 ms vs 3.4–3.6 ms with vibrancy over five runs
-    /// (the glass re-renders on the key-state change: commit ~3 vs 0.7 ms); keystrokes
-    /// cost the same (~2 ms incl. OS delivery). Both are under one 120 Hz frame.
-    /// The user prefers glass at that price. Fallback, no rebuild needed:
-    /// `defaults write dev.fred.Fred debugBackdrop vibrancy` (NSVisualEffectView, state
-    /// pinned active so focus changes don't re-render it, resized directly).
-    static let vibrancy = UserDefaults.standard.string(forKey: "debugBackdrop") == "vibrancy"
-    static var backdrop: String { vibrancy ? "vibrancy" : "glass" }
+    /// The backdrop is Liquid Glass: one full-height NSGlassEffectView that is never
+    /// resized (resizing re-renders it, ~1 ms), clipped by this rounded mask layer, whose
+    /// height is what moves. On-screen A/B on 2026-11-15 (`fredctl hotkeybench 30`, p50,
+    /// five runs): show 5.3–6.4 ms vs 3.4–3.6 ms with NSVisualEffectView vibrancy (glass
+    /// re-renders on the key-state change: commit ~3 vs 0.7 ms); keystrokes cost the same
+    /// (~2 ms incl. OS delivery). The user chose glass; vibrancy was removed (it's in git
+    /// history before commit "Glass is the only backdrop").
+    private let glassMask = CALayer.still()
 
     init(width: CGFloat, heights: [CGFloat]) {
         maxHeight = heights.max() ?? 64
@@ -54,30 +47,16 @@ class FloatingPanel: NSPanel {
 
         root.frame = NSRect(x: 0, y: 0, width: width, height: maxHeight)
         root.wantsLayer = true
-        if Self.vibrancy {
-            let v = NSVisualEffectView(frame: root.bounds)
-            v.material = .popover
-            v.blendingMode = .behindWindow
-            v.state = .active
-            v.wantsLayer = true
-            v.layer?.cornerRadius = Theme.cornerRadius
-            v.layer?.masksToBounds = true
-            backdropView = v
-        } else {
-            let container = FlippedView(frame: root.bounds)
-            container.wantsLayer = true
-            let ge = NSGlassEffectView(frame: container.bounds)
-            ge.style = .regular
-            ge.cornerRadius = Theme.cornerRadius
-            container.addSubview(ge)
-            let m = CALayer.still()
-            m.backgroundColor = NSColor.black.cgColor
-            m.cornerRadius = Theme.cornerRadius
-            container.layer!.mask = m
-            glassMask = m
-            backdropView = container
-        }
-        root.addSubview(backdropView)
+        let container = FlippedView(frame: root.bounds)
+        container.wantsLayer = true
+        let glass = NSGlassEffectView(frame: container.bounds)
+        glass.style = .regular
+        glass.cornerRadius = Theme.cornerRadius
+        container.addSubview(glass)
+        glassMask.backgroundColor = NSColor.black.cgColor
+        glassMask.cornerRadius = Theme.cornerRadius
+        container.layer!.mask = glassMask
+        root.addSubview(container)
         content.frame = root.bounds
         content.wantsLayer = true
         root.addSubview(content)
@@ -166,23 +145,18 @@ class FloatingPanel: NSPanel {
         setHeight(height)
     }
 
-    /// Visible height of the backdrop (the panel's apparent height).
-    var glassHeight: CGFloat { glassMask?.frame.height ?? backdropView.frame.height }
+    /// Visible height of the glass (the panel's apparent height).
+    var glassHeight: CGFloat { glassMask.frame.height }
 
     func setHeight(_ h: CGFloat) {
         let h = min(h, maxHeight)
-        if let m = glassMask {
-            guard abs(m.frame.height - h) > 0.5 else { return }
-            m.frame = CGRect(x: 0, y: 0, width: frame.width, height: h)
-        } else {
-            guard abs(backdropView.frame.height - h) > 0.5 else { return }
-            backdropView.frame = NSRect(x: 0, y: 0, width: frame.width, height: h)
-        }
+        guard abs(glassMask.frame.height - h) > 0.5 else { return }
+        glassMask.frame = CGRect(x: 0, y: 0, width: frame.width, height: h)
         invalidateShadow()
     }
 
-    /// Pays the backdrop's first-render cost at launch (call while ordered in, invisible).
-    func warmBackdrop() {
+    /// Pays the glass's first-render cost at launch (call while ordered in, invisible).
+    func warmGlass() {
         displayIfNeeded()
         CATransaction.flush()
     }
