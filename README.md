@@ -33,12 +33,27 @@ latency.
 Hotkeys are ⌘Space / ⌘⇧C. Only one app can hold a hotkey: if another app grabs them
 first, Fred keeps retrying and takes over as soon as they're free.
 
+## Install
+
+```
+brew install --cask lingrino/tap/fred
+open -a Fred
+```
+
+On first launch Fred adds itself to login items and asks for each permission it uses;
+Fred Settings (⌘,) shows which ones are missing, each with a button to the right System
+Settings page. Three need a manual switch: Paste from Other Apps → Allow (clipboard
+history), Full Disk Access (Chrome bookmarks), and turning off Spotlight's ⌘Space
+shortcut (System Settings → Keyboard → Keyboard Shortcuts → Spotlight). Update with
+`brew upgrade --cask fred`; Fred restarts itself when its app is replaced.
+
 ## Build
 
 Xcode 27 or the Command Line Tools (SwiftPM, no Xcode project). `make install` builds,
-signs with a local self-signed identity and installs to /Applications. `make test`,
+signs with the maintainer's Developer ID (`scripts/setup-signing.sh`) and installs to
+/Applications; to build without it, `FRED_SIGN_IDENTITY=- make install` (ad-hoc). `make test`,
 `make bench`. Every PR runs lint and tests in GitHub Actions, and every merge to main is
-built as release 0.0.N. Details for the maintainer (architecture, measurements, rules)
+released as 0.0.N: signed with a Developer ID, notarized, and published to the tap. Details for the maintainer (architecture, measurements, rules)
 are in [AGENTS.md](AGENTS.md).
 
 Data lives in `~/Library/Application Support/Fred/` (learning log, clipboard log, images).

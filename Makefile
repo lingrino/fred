@@ -18,8 +18,9 @@ INSTALLED  := /Applications/Fred.app
 
 all: app
 
+# Local builds sign with the Developer ID (setup-signing.sh) unless FRED_SIGN_IDENTITY says otherwise.
 signing:
-	@./scripts/setup-signing.sh >/dev/null
+	@[ -n "$$FRED_SIGN_IDENTITY" ] || ./scripts/setup-signing.sh --check
 
 app: signing
 	./scripts/swift.sh build -c release --product Fred
@@ -65,8 +66,8 @@ smoke:
 
 check: lint test smoke
 
-# Locally this signs with the self-signed identity and skips notarization (no Apple
-# credentials here); CI signs with Developer ID and notarizes when its secrets exist.
+# Locally this signs with the Developer ID but skips notarization (no API key here) and
+# keeps the control socket; CI signs, notarizes and publishes.
 release: signing
 	./scripts/release.sh
 

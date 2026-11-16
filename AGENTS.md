@@ -15,8 +15,9 @@ To pick it up again:
 1. Read this file, `git log --oneline -20`, and the memory notes. Check "Open decisions".
 2. `sw_vers; swift --version`: if macOS, Xcode or the Command Line Tools changed, read
    "What OS/toolchain updates can break" below before anything else.
-3. `make check` (zero-warning build, unit tests, live smoke test against the installed
-   app; no focus stealing). Fix what it reports before new work.
+3. `make install`, then `make check` (zero-warning build, unit tests, live smoke test
+   against the installed app; no focus stealing). The install matters: a brew release
+   has no control socket, so smoke can't reach it. Fix what it reports before new work.
 4. `make bench`: compares with `Benchmarks/baseline.tsv`, flags ≥20% & ≥0.5 µs slower
    (rerun once; medians wobble). `fredctl stats` shows the user's real latency. When the
    user is idle: `fredctl live run` and `fredctl hotkeybench 30` (on-screen checks).
@@ -69,7 +70,7 @@ make install       # same, as the user runs it (accessory app, no Dock icon)
 make bench         # FredBench over a synthetic seeded catalog, Δ vs Benchmarks/baseline.tsv
                    #   (then the same queries over this Mac's catalog, not baselined)
 make bench-save    # …and make this run the baseline
-make release       # what CI publishes (build/release/: zip + cask), self-signed locally
+make release       # what CI publishes (build/release/: zip + cask); not notarized locally
 scripts/fredctl …  # talk to the running app (see "Control socket")
 ```
 
@@ -124,12 +125,15 @@ Toolchain (Xcode 27 is active on this Mac since 2026-11, and in CI):
   gets a clean copy via `SWIFTPM_CUSTOM_LIBS_DIR`), and the swift-testing macro plugin
   not being found (test builds get `-plugin-path`). Check that branch with
   `DEVELOPER_DIR=/Library/Developer/CommandLineTools scripts/swift.sh test --scratch-path <dir>`.
-- Local builds are signed with a self-signed identity ("Fred Local Signing") in a
-  dedicated keychain (`scripts/setup-signing.sh`, password in
-  `~/Library/Application Support/FredDev/`). This keeps the designated requirement stable
-  so the user's privacy grants survive rebuilds. Never switch local builds to ad-hoc
-  signing or change the bundle id `dev.fred.Fred`. Releases are signed with the Developer
-  ID: moving a Mac between the two means granting every permission again, once.
+- Local builds are signed with the same Developer ID as releases (no timestamp, not
+  notarized), from a dedicated keychain that `scripts/setup-signing.sh` fills from
+  `github/keys/fred` (password in `~/Library/Application Support/FredDev/`; `make` checks
+  it with `--check`). Every Developer ID signature has the same designated requirement
+  (bundle id + team ID), so the user's privacy grants carry across `brew upgrade` and
+  `make install` and survive certificate renewals. The user's Mac installs the cask like
+  the others; `make install` replaces it with a local build (control socket included)
+  until the next `brew upgrade`. Never switch local builds to ad-hoc or another identity,
+  or change the bundle id `dev.fred.Fred`: that means granting every permission again.
 
 ## Privacy grants (user-only; check with `fredctl permissions`)
 
@@ -287,8 +291,8 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
 
 ## Testing etiquette on the user's Mac
 
-- Treat the repo as public (it is private only until releases are signed, see "Open
-  decisions"). Never commit the user's real data — contact names, bookmarks,
+- The repo is public (since 2026-11-16), and so are PR bodies, review comments and CI
+  logs. Never commit the user's real data — contact names, bookmarks,
   clipboard text, learning history, query logs, or the names of third-party apps installed
   on their Mac — in tests, docs, benchmarks, comments or commit messages, even when
   debugging a real-world ranking complaint: reproduce it with fictional names (Goober
@@ -319,17 +323,18 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 - Toolchain: the CLT workarounds (`scripts/swift.sh`, only when the CLT is active), new
   compiler diagnostics (`make lint`), the CI runner label (`xcode-27`: move to the next
   Xcode major's label when GitHub ships it) and the workflows' `DEVELOPER_DIR` (keep it on
-  the local Xcode; the image's readme lists what's installed). Signing keychain + password in
-  `~/Library/Application Support/FredDev/` — losing it means a new identity, and the user
-  must re-grant every permission (one-way door: ask first).
+  the local Xcode; the image's readme lists what's installed). Signing: losing the Fred
+  keychain or its password just means `scripts/setup-signing.sh` again; a renewed
+  certificate goes through `store-release-secrets.sh`, then `setup-signing.sh`.
 
 ## Open decisions
 
-- Releases build on every merge but aren't signed or published until the Developer ID
-  secrets exist (`github/keys/fred`); the repo goes public and the cask starts publishing
-  after that.
+None.
 
-(Resolved 2026-11-15: Liquid Glass is the only backdrop; numbers in "Latency notes".)
+(Resolved 2026-11-15: Liquid Glass is the only backdrop; numbers in "Latency notes".
+2026-11-16: releases are signed with the Developer ID, notarized and published to the
+tap; the repo is public; every Mac, the user's included, installs the cask, and local
+builds sign with the same Developer ID.)
 
 ## Latency notes (measured 2026-11-14, M4 Max, macOS 27.2; `fredctl stats`)
 
