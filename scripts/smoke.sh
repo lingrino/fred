@@ -7,8 +7,10 @@
 # hotkey, ranking/converter regressions on the real catalog, implicit animations on rows,
 # broken offscreen rendering. Expectations use stable system items only — never anything
 # that depends on the user's learning history.
+# `check && ok || bad …` is safe here: ok always succeeds, so bad runs only on failure.
+# shellcheck disable=SC2015
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 CTL=scripts/fredctl
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); }

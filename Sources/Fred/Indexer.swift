@@ -25,6 +25,10 @@ final class Indexer: @unchecked Sendable {
     var onCatalog: (@MainActor (Catalog, [AppScanner.App], [SettingsScanner.Pane]) -> Void)?
     private var appList: [AppScanner.App] = []
     private var paneList: [SettingsScanner.Pane] = []
+    /// Called on main when something inside Fred's own bundle changed on disk (an upgrade
+    /// replacing it); the app roots are watched anyway, so this costs nothing extra.
+    var onSelfChanged: (@MainActor () -> Void)?
+    private let selfBundle = Bundle.main.bundlePath + "/"
 
     enum Source: Hashable { case apps, bookmarks, contacts, all }
     private var pendingSources: Set<Source> = []
@@ -113,14 +117,16 @@ final class Indexer: @unchecked Sendable {
         let cb: FSEventStreamCallback = { _, info, n, pathsPtr, _, _ in
             let me = Unmanaged<Indexer>.fromOpaque(info!).takeUnretainedValue()
             let paths = unsafeBitCast(pathsPtr, to: NSArray.self) as? [String] ?? []
-            var apps = false, bms = false
+            var apps = false, bms = false, selfChanged = false
             for p in paths.prefix(n) {
+                if (p + "/").hasPrefix(me.selfBundle) { selfChanged = true }
                 if p.hasPrefix(ChromeBookmarks.chromeDir) {
                     if p.hasSuffix("Bookmarks") || p.hasSuffix("Bookmarks/") || p.contains("/Bookmarks") { bms = true }
                 } else { apps = true }
             }
             if apps { me.schedule(.apps, delay: 1.0) }
             if bms { me.schedule(.bookmarks, delay: 0.5) }
+            if selfChanged { DispatchQueue.main.async { MainActor.assumeIsolated { me.onSelfChanged?() } } }
         }
         guard let s = FSEventStreamCreate(nil, cb, &context, paths as CFArray,
                                           FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0,

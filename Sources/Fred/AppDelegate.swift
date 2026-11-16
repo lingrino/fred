@@ -20,6 +20,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let launcherKey = (code: kVK_Space, mods: cmdKey)
     static let clipboardKey = (code: kVK_ANSI_C, mods: cmdKey | shiftKey)
 
+    /// An upgrade (`brew upgrade`) swaps the bundle on disk under the running process.
+    /// Once changes inside it settle and its executable is a different file from the one
+    /// Fred started from, Fred restarts into the new version. `make install` kills Fred
+    /// first, so this only fires when something else replaced the app.
+    private let launchedExecutable = fileID(Bundle.main.executablePath)
+    private var selfChangeGeneration = 0
+
+    private func selfChanged() {
+        selfChangeGeneration &+= 1
+        let generation = selfChangeGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, generation == self.selfChangeGeneration,
+                      let now = fileID(Bundle.main.executablePath), now != self.launchedExecutable else { return }
+                Log.info("Fred.app was replaced on disk: restarting into the new version")
+                Actions.relaunch()
+            }
+        }
+    }
 
     /// Picks up a grant given while Fred is running (no OS notification exists for
     /// that): when a source is still empty and its permission now checks out, reindex.
@@ -57,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         indexer.onCatalog = { [weak self] c, apps, panes in
             self?.engine.setCatalog(c, apps: apps, panes: panes)
         }
+        indexer.onSelfChanged = { [weak self] in self?.selfChanged() }
         indexer.start()
         mark("indexer")
 
@@ -104,4 +124,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DispatchQueue.global(qos: .utility).async { Converter.warm() }
     }
+}
+
+/// Identity of the file at `path` (inode + modification time), nil if it doesn't exist.
+private func fileID(_ path: String?) -> [Int]? {
+    guard let path else { return nil }
+    var st = stat()
+    guard stat(path, &st) == 0 else { return nil }
+    return [Int(st.st_ino), st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec]
 }
