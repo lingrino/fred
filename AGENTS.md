@@ -237,9 +237,11 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
 ## Testing etiquette on the user's Mac
 
 - The repo is public. Never commit the user's real data — contact names, bookmarks,
-  clipboard text, learning history, query logs — in tests, docs, benchmarks or commit
-  messages, even when debugging a real-world ranking complaint: reproduce it with
-  fictional names.
+  clipboard text, learning history, query logs, or the names of third-party apps installed
+  on their Mac — in tests, docs, benchmarks, comments or commit messages, even when
+  debugging a real-world ranking complaint: reproduce it with fictional names (Goober
+  Chroma, Vivid Story Composer, iTally, Kermit Frog, `*.example` hosts). Apple's stock
+  apps (Safari, Finder, System Settings…) are fine.
   Push only `main`; other refs in this clone (e.g. `refs/codex/…` checkpoints) are
   local tool state.
 
