@@ -5,9 +5,8 @@ of one. Claude is the sole maintainer. Optimize for: latency first, then the
 maintainer's understanding. Prefer changing code over adding settings — there is no
 preferences UI and there should not be one.
 
-This file is the agent guide for any coding agent. `CLAUDE.md` only imports it
-(`@AGENTS.md`): Claude Code 2.1.241 doesn't read a project AGENTS.md by itself (checked
-2026-11-15 — its Codex importer copies AGENTS.md *into* CLAUDE.md). Edit this file, not that one.
+This is the agent guide for any coding agent. Claude Code (v2.1.277+) reads it natively
+when there is no CLAUDE.md, so don't add one: a CLAUDE.md here would shadow this file.
 
 ## Coming back after a break
 
