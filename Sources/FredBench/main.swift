@@ -3,7 +3,8 @@ import Foundation
 
 // fredbench <command>
 //   scan     print what every source finds on this machine (no Contacts: needs the app's grant)
-//   bench    search micro-benchmarks over the real catalog
+//   bench    micro-benchmarks over the real catalog, compared with Benchmarks/baseline.tsv
+//   save     same, then overwrite the baseline
 let args = CommandLine.arguments.dropFirst()
 switch args.first ?? "bench" {
 case "scan":
@@ -18,6 +19,8 @@ case "scan":
     for p in panes { print("pane  \(p.name) | \(p.bundleID)") }
     for b in bms.prefix(20) { print("bm    \(b.title) | \(b.url)") }
     print("apps=\(apps.count) \((t1-t0)/1000)µs  panes=\(panes.count) \((t2-t1)/1000)µs  bookmarks=\(bms.count) \((t3-t2)/1000)µs")
+case "save":
+    Bench.run(save: true)
 default:
-    Bench.run()
+    Bench.run(save: false)
 }

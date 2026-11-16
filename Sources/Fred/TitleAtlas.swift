@@ -32,12 +32,15 @@ final class TitleAtlas: @unchecked Sendable {
         defer { lines.deinitialize(count: max(n, 1)); lines.deallocate(); widths.deallocate() }
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black.cgColor]
         let ell = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: attrs))
+        // Iteration i writes lines[i] and widths[i] only; attrs is read-only.
+        let shared = Disjoint((lines: lines, widths: widths, attrs: attrs))
         DispatchQueue.concurrentPerform(iterations: n) { i in
-            var line = CTLineCreateWithAttributedString(NSAttributedString(string: titles[i], attributes: attrs))
+            let s = shared.value
+            var line = CTLineCreateWithAttributedString(NSAttributedString(string: titles[i], attributes: s.attrs))
             if CTLineGetTypographicBounds(line, nil, nil, nil) > Double(maxWidth),
                let t = CTLineCreateTruncatedLine(line, Double(maxWidth), .end, ell) { line = t }
-            lines[i] = line
-            widths[i] = Int(((CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) + 2) * scale).rounded(.up))
+            s.lines[i] = line
+            s.widths[i] = Int(((CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) + 2) * scale).rounded(.up))
         }
         // Shelf packing in item order (deterministic).
         var r = [CGRect](repeating: .zero, count: n)
@@ -57,7 +60,10 @@ final class TitleAtlas: @unchecked Sendable {
         // Pass 2 (parallel by shelf): draw glyph coverage into the alpha buffer.
         let shelves = H / rowPx
         let descent = -font.descender
+        // Shelf s draws into its own rows of buf; lines and rects are read-only here.
+        let packed = r, draw = Disjoint((buf: buf, lines: lines))
         DispatchQueue.concurrentPerform(iterations: shelves) { s in
+            let buf = draw.value.buf, lines = draw.value.lines, r = packed
             let base = buf + s * rowPx * W
             guard let ctx = CGContext(data: base, width: W, height: rowPx, bitsPerComponent: 8, bytesPerRow: W,
                                       space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue)

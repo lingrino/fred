@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let launcherKey = (code: kVK_Space, mods: cmdKey)
     static let clipboardKey = (code: kVK_ANSI_C, mods: cmdKey | shiftKey)
 
+
     /// Picks up a grant given while Fred is running (no OS notification exists for
     /// that): when a source is still empty and its permission now checks out, reindex.
     private func retryMissingSources() {

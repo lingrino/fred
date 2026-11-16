@@ -107,9 +107,9 @@ final class ControlServer: @unchecked Sendable {
             var s = "\(top.count) results in \(dt / 1000) µs\n"
             let a0 = nowNanos()
             if let v = Calculator.evaluate(arg) {
-                s += "  answer\tmath\t\(v)\n"
+                s += "  answer\tmath\t\(v.display)\n"
             } else if let a = Converter.evaluate(arg) {
-                s += "  answer\t\(a.kind)\t\(a.title)\t\(a.detail)\t(\((nowNanos() - a0) / 1000) µs)\n"
+                s += "  answer\t\(a.kind)\t\(a.title)\t\(a.detail ?? "")\t(\((nowNanos() - a0) / 1000) µs)\n"
             }
             for i in 0..<top.count {
                 let it = top.item(i)
@@ -197,7 +197,7 @@ final class ControlServer: @unchecked Sendable {
         case "dryrun": Actions.dryRun = arg != "off"; return "dryrun \(Actions.dryRun)"
         case "clip": return app.clipboard?.control(arg) ?? "clipboard: off"
         default:
-            return "commands: stats permissions request query <q> show hide type <q> key down|up|esc learn reindex dryrun on|off clip …"
+            return "commands: stats permissions request query <q> show hide type <q> key down|up|esc learn reindex dryrun on|off clip … settings [png] animcheck q1|q2"
         }
     }
 

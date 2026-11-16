@@ -68,7 +68,8 @@ public enum AppScanner {
         let loaded = UnsafeMutableBufferPointer<App?>.allocate(capacity: n)
         loaded.initialize(repeating: nil)
         defer { loaded.deinitialize(); loaded.deallocate() }
-        DispatchQueue.concurrentPerform(iterations: n) { i in loaded[i] = load(candidates[i]) }
+        let cands = candidates, out = Disjoint(loaded)   // iteration i writes slot i only
+        DispatchQueue.concurrentPerform(iterations: n) { i in out.value[i] = load(cands[i]) }
 
         // 3. Dedupe by bundle id, keeping the first (highest-priority root).
         var found: [App] = []

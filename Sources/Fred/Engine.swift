@@ -53,10 +53,10 @@ final class Engine {
         titles = nil
         onTitles?(nil)
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-        let names = c.titles
+        let names = c.titles, maxWidth = Engine.titleMaxWidth
         DispatchQueue.global(qos: .userInitiated).async {
             let t0 = nowNanos()
-            let t = TitleAtlas(titles: names, font: Theme.rowFont, maxWidth: Engine.titleMaxWidth, scale: scale)
+            let t = TitleAtlas(titles: names, font: Theme.rowFont, maxWidth: maxWidth, scale: scale)
             Log.info("title atlas: \(names.count) titles, \(t.map { "\($0.width)x\($0.height)" } ?? "failed") in \((nowNanos() - t0) / 1000) µs")
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

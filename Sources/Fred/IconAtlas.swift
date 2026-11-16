@@ -89,10 +89,11 @@ final class IconAtlas: @unchecked Sendable {
 
         // Each slot is drawn through its own CGContext that windows into the shared buffer,
         // so threads never touch the same pixels.
-        func context(slot: Int) -> CGContext {
+        let pixels = Disjoint(buffer)
+        @Sendable func context(slot: Int) -> CGContext {
             let x = (slot % cols) * px
             let y = (slot / cols) * px   // top-down in memory
-            let base = buffer + y * rowBytes + x * 4
+            let base = pixels.value + y * rowBytes + x * 4
             let ctx = CGContext(data: base, width: px, height: px, bitsPerComponent: 8, bytesPerRow: rowBytes,
                                 space: cs, bitmapInfo: info)!
             ctx.interpolationQuality = .high

@@ -5,7 +5,52 @@ import Foundation
 /// (so the index is heavier than today's: worst-case thinking). Runs at user-interactive
 /// QoS (P-cores), warms up, reports min/p50/p99 per query.
 enum Bench {
-    static func run() {
+    /// (name, p50 ns) of every benchmark, in print order; compared with / saved to the
+    /// committed baseline (`make bench` / `make bench-save`).
+    nonisolated(unsafe) static var results: [(name: String, p50: UInt64)] = []
+    static let baselinePath = "Benchmarks/baseline.tsv"
+
+    /// Records the median of `sorted` (ascending) under `name`.
+    static func record(_ name: String, _ sorted: [UInt64]) { results.append((name, sorted[sorted.count / 2])) }
+
+    static func run(save: Bool) {
+        runAll()
+        if save { saveBaseline() } else { compareBaseline() }
+    }
+
+    static func saveBaseline() {
+        let body = results.map { "\($0.name)\t\($0.p50)" }.joined(separator: "\n") + "\n"
+        do {
+            try FileManager.default.createDirectory(atPath: "Benchmarks", withIntermediateDirectories: true)
+            try body.write(toFile: baselinePath, atomically: true, encoding: .utf8)
+            print("\nsaved \(results.count) p50s to \(baselinePath)")
+        } catch { print("\ncan't save baseline: \(error)") }
+    }
+
+    /// Medians move a few % run to run (±10% on sub-µs ones); ≥ 20% AND ≥ 0.5 µs slower
+    /// is worth a look (run again first).
+    static func compareBaseline() {
+        guard let text = try? String(contentsOfFile: baselinePath, encoding: .utf8) else {
+            print("\nno \(baselinePath) yet (make bench-save)"); return
+        }
+        var base: [String: UInt64] = [:]
+        for line in text.split(separator: "\n") {
+            let f = line.split(separator: "\t")
+            if f.count == 2, let v = UInt64(f[1]) { base[String(f[0])] = v }
+        }
+        print("\np50 vs \(baselinePath) (⚠ = ≥20% and ≥0.5 µs slower):")
+        var flagged = 0
+        for r in results {
+            guard let b = base[r.name], b > 0 else { print(pad(r.name, 30), "new"); continue }
+            let d = (Double(r.p50) - Double(b)) / Double(b) * 100
+            let worse = d >= 20 && r.p50 >= b + 500
+            if worse { flagged += 1 }
+            print(pad(r.name, 30), fmt(b), "→", fmt(r.p50), String(format: "%+6.0f%%", d), worse ? "⚠" : "")
+        }
+        print(flagged == 0 ? "no regressions" : "\(flagged) regression(s) — rerun to rule out noise")
+    }
+
+    static func runAll() {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
         var rng = SplitMix(seed: 42)
 
@@ -48,6 +93,7 @@ enum Bench {
             }
             samples.sort()
             total += samples
+            record("search \"\(q)\"", samples)
             print(pad(q, 18), fmt(samples[0]), fmt(samples[samples.count / 2]), fmt(samples[samples.count * 99 / 100]))
         }
         total.sort()
@@ -63,6 +109,7 @@ enum Bench {
             qs.append(b - a)
         }
         qs.sort()
+        record("Matcher.Query", qs)
         print("Matcher.Query(\"sys set\"): p50 \(fmt(qs[qs.count / 2]))")
 
         clipBench(&rng)
@@ -93,6 +140,7 @@ enum Bench {
                 samples.append(b - a)
             }
             samples.sort()
+            record("clip \"\(q)\"", samples)
             print(pad("clip \"\(q)\"", 22), fmt(samples[0]), fmt(samples[samples.count / 2]), fmt(samples[samples.count * 99 / 100]))
         }
     }
@@ -107,6 +155,7 @@ enum Bench {
             samples.append(b - a)
         }
         samples.sort()
+        record("calculator", samples)
         print("\ncalculator: p50 \(fmt(samples[samples.count / 2])) (includes result formatting)")
     }
 
@@ -127,6 +176,7 @@ enum Bench {
                 samples.append(b - a)
             }
             samples.sort()
+            record("converter \"\(q)\"", samples)
             print(pad("\"\(q)\"", 22), fmt(samples[0]), fmt(samples[samples.count / 2]), fmt(samples[samples.count * 99 / 100]))
         }
     }

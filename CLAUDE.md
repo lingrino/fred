@@ -5,6 +5,20 @@ of one. Claude is the sole maintainer. Optimize for: latency first, then the
 maintainer's understanding. Prefer changing code over adding settings — there is no
 preferences UI and there should not be one.
 
+## Coming back after a break
+
+Development is at a slow pace since 2026-11-15: features are done, Fred is in daily use.
+To pick it up again:
+1. Read this file, `git log --oneline -20`, and the memory notes. Check "Open decisions".
+2. `sw_vers; swift --version`: if macOS or the Command Line Tools changed, read
+   "What OS/toolchain updates can break" below before anything else.
+3. `make check` (zero-warning build, unit tests, live smoke test against the installed
+   app; no focus stealing). Fix what it reports before new work.
+4. `make bench`: compares with `Benchmarks/baseline.tsv`, flags ≥20% & ≥0.5 µs slower
+   (rerun once; medians wobble). `fredctl stats` shows the user's real latency.
+5. Work → test of the right kind (see "Testing") → `make check` → `make install` → commit.
+   If a benchmark moves on purpose, `make bench-save` and say why in the commit.
+
 ## What it does (and deliberately doesn't)
 
 - **Launcher** (⌘Space): one ranked list (max 5
@@ -39,12 +53,30 @@ preferences UI and there should not be one.
 ## Build, run, test
 
 ```
-make test          # unit tests (debug, all runtime checks on) — run before every commit
+make check         # lint + test + smoke — run before every commit
+make lint          # debug+release+tests build with -warnings-as-errors (own scratch dir)
+make test          # unit tests (debug, all runtime checks on)
+make smoke         # scripts/smoke.sh: live checks against the running app via fredctl
 make dev           # release build → /Applications/Fred.app, relaunch with --regular (Dock icon so computer-use can see it)
 make install       # same, as the user runs it (accessory app, no Dock icon)
-make bench         # FredBench: search micro-benchmarks over the real catalog
+make bench         # FredBench over the real catalog, Δ vs Benchmarks/baseline.tsv
+make bench-save    # …and make this run the baseline
 scripts/fredctl …  # talk to the running app (see "Control socket")
 ```
+
+### Testing — which kind for which change
+- FredCore logic: Swift Testing unit tests in `Tests/FredCoreTests`. Ranking complaint →
+  a test in `MatcherTests`/`RegressionTests` first; parsers → `ConverterTests`/
+  `CalculatorTests`; storage formats → `ClipStoreTests`; invariants → `FuzzTests`.
+- Hot-path speed: `make bench` (add a benchmark next to the code you touch).
+- App integration (real sources on this Mac, grants, hotkeys, ranking on the real
+  catalog, rendering, implicit animations): add an expectation to `scripts/smoke.sh`.
+  Only stable system items — nothing that depends on the user's learning history.
+- Looks: `fredctl snapshot <png> <q>`, `card <png> <q>`, `settings <png>`, then view the PNG.
+- Focus/typing/hotkeys (can't be automated without taking the screen): computer use,
+  only when the user is idle (see "Control socket").
+- No formatter/linter beyond the compiler: style is consistent by hand and a reformat
+  would bury `git blame`. Zero warnings is the rule (`make lint`).
 
 Toolchain quirks on this machine (Command Line Tools only, no Xcode):
 - `scripts/swift.sh` wraps `swift`: the CLT ships stale Feb-2024
@@ -86,6 +118,7 @@ Sources/FredCore/          pure logic, no AppKit — unit-tested, benchmarked
   Calculator.swift         allocation-free recursive-descent evaluator
   Converter.swift          units/data/time-zone instant answers: byte-level parsing, offset math (no formatters)
   ClipStore.swift          clipboard history SoA + append-only log + images dir + search
+  Disjoint.swift           @unchecked Sendable box for concurrentPerform buffers (disjoint writes)
   Sources/*.swift          AppScanner, SettingsScanner, Commands, ChromeBookmarks (Foundation only)
 Sources/Fred/              the app
   main.swift               FredApplication (fast key dispatch to QueryField) + entry point
@@ -103,8 +136,11 @@ Sources/Fred/              the app
   ClipboardController.swift pasteboard polling, clipboard panel + preview, paste
   Actions.swift            open, system commands (loginwindow AEs, lock, Finder), ⌘V posting
   SettingsWindow.swift     "Fred Settings" health window (AppKit, plain NSWindow)
-  ContactsSource / ContactCard / Permissions / LoginItem / ControlServer / Snapshot / Log
-Sources/FredBench/         `fredbench scan` (what sources find) and `fredbench` (benchmarks)
+  ContactsSource / ContactCard / Permissions / LoginItem / HotKeys / ControlServer / GlassBench / Log
+Sources/FredBench/         `fredbench scan` (what sources find), `bench`, `save` (baseline)
+Benchmarks/baseline.tsv    p50 per benchmark (ns), compared by `make bench`
+scripts/                   swift.sh (toolchain wrapper), bundle.sh, setup-signing.sh, fredctl,
+                           lint.sh, smoke.sh, make-icon.swift
 ```
 
 Data flow: Indexer (utility queue) → `Catalog` (immutable, Sendable) → main → `Engine.setCatalog`
@@ -180,7 +216,7 @@ focus; with a path: render it offscreen),
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
 (visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
 `learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`,
-`animcheck <q1>|<q2>` (implicit animations on layers),
+`animcheck <q1>|<q2>` (implicit animations on layers; alpha-0 panel, no focus),
 `glassbench` (backdrop variants' show/resize cost; takes key focus — run when idle).
 
 Interactive testing with computer use: `make dev` (Dock icon + Fred activates on show,
@@ -195,6 +231,33 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
   `fredctl dryrun on` or launch with `FRED_DRY_RUN=1`.
 - Don't pollute clipboard history; remove test clips with `fredctl clip forget <q>`.
 - Prefer `snapshot` over showing panels; the user may be typing in another app.
+
+## What OS/toolchain updates can break
+
+Fred leans on things Apple can change. `make smoke` notices most of them (source counts,
+grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
+- Settings panes: `/System/Library/ExtensionKit/Extensions/*.appex` with the settings
+  extension point, `x-apple.systempreferences:<bundle id>` URLs, `en.lproj/*.searchTerms`
+  plists (sub-settings), `?Privacy_*` anchors (Fred Settings "Open…" buttons).
+- Lock: private `login.framework` `SACLockScreenImmediate` (dlsym; logs if missing).
+- Chrome bookmarks: `~/Library/Application Support/Google/Chrome/*/Bookmarks` JSON behind
+  macOS 27 app-data protection (user grant).
+- Clipboard: `NSPasteboard.accessBehavior` ("Paste from Other Apps"); paste/typing via
+  CGEvent (`CGPreflightPostEventAccess`). Hotkeys: Carbon `RegisterEventHotKey`.
+- Liquid Glass / `NSGlassEffectView` cost (re-measure with `glassbench` when idle).
+- Toolchain: the CLT stale-interface workaround (`scripts/swift.sh`), the testing plugin
+  path (Makefile), new compiler diagnostics (`make lint`). Signing keychain + password in
+  `~/Library/Application Support/FredDev/` — losing it means a new identity, and the user
+  must re-grant every permission (one-way door: ask first).
+
+## Open decisions
+
+- Backdrop: the user prefers Liquid Glass "but not for 10 ms". The masked single-glass
+  variant (`defaults write dev.fred.Fred debugBackdrop glass`, set on the user's Mac since
+  2026-11-15) measured offscreen: show 1.0 ms / resize 0.04 ms vs vibrancy 0.18 / 0.09
+  (multi-glass 1.6/0.08, resized glass 0.9/1.1). Still to do: read real `hotkey→committed`
+  from `fredctl stats` after some days of use, then make the winner `Panel.backdrop`'s
+  default and delete the losing variants + `GlassBench` (they are experiment code).
 
 ## Latency notes (measured 2026-11-14, M4 Max, macOS 27.2; `fredctl stats`)
 

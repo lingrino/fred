@@ -72,6 +72,7 @@ public final class Learning {
         apply(e)
     }
 
+
     public var isEmpty: Bool { fKeys.isEmpty && assoc.isEmpty }
 
     func apply(_ e: Event) {

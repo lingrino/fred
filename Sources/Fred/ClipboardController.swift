@@ -140,12 +140,13 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
         if !hasString, let type = [NSPasteboard.PasteboardType.png, .tiff].first(where: { types.contains($0) }) {
             // Image data can be tens of MB: read, hash, convert and write off the main thread.
             let change = pb.changeCount
+            guard let imagesDir = store.imagesDir else { return }
             io.async { [weak self] in
                 guard let self, NSPasteboard.general.changeCount == change,
                       let data = NSPasteboard.general.data(forType: type) else { return }
                 let h = data.withUnsafeBytes { ClipStore.hash($0, seed: 1) }
                 guard let (png, w, hgt) = Self.pngAndSize(data, type: type) else { return }
-                let url = self.store.imagesDir!.appendingPathComponent(String(format: "%016llx.png", h))
+                let url = imagesDir.appendingPathComponent(String(format: "%016llx.png", h))
                 if !FileManager.default.fileExists(atPath: url.path) { try? png.write(to: url) }
                 let thumb = Self.thumbnail(url: url)
                 DispatchQueue.main.async {
