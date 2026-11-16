@@ -8,7 +8,7 @@ import Carbon
 /// that panel isn't key, so nothing reaches another app.
 ///
 /// They take keyboard focus for a few seconds: run them only when the user is idle
-/// (CLAUDE.md "Control socket"). Results are read back with the same command, no args.
+/// (AGENTS.md "Control socket"). Results are read back with the same command, no args.
 ///   fredctl hotkeybench <n>   n × (⌘Space → type "safa" → hide): show + keystroke latency
 ///   fredctl live run          typeText (contact Enter) and ⌘, → Fred Settings
 @MainActor

@@ -37,6 +37,6 @@ first, Fred keeps retrying and takes over as soon as they're free.
 
 Command Line Tools only (no Xcode). `make install` builds, signs with the local identity
 and installs to /Applications. `make test`, `make bench`. Details for the maintainer
-(architecture, measurements, rules) are in [CLAUDE.md](CLAUDE.md).
+(architecture, measurements, rules) are in [AGENTS.md](AGENTS.md).
 
 Data lives in `~/Library/Application Support/Fred/` (learning log, clipboard log, images).
