@@ -107,7 +107,10 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
 - Secrets come from Terraform in lingrino/infra: `HOMEBREW_TAP_GITHUB_TOKEN`, and from
   AWS Secrets Manager `github/keys/fred`: `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`
   (Developer ID Application certificate), `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`,
-  `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool).
+  `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool). The user puts them
+  there with `scripts/store-release-secrets.sh <.p12> <AuthKey_ID.p8> <issuer>`: it asks
+  for the .p12 password, checks the identity imports and notarytool accepts the key, then
+  writes the JSON. Rerun it to rotate (Developer ID certificates last five years).
 - Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
   Fred once its executable is a different file.
