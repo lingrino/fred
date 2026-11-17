@@ -105,14 +105,17 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   zips and writes the cask. With the Apple secrets it publishes GitHub release `v0.0.N`
   and, while the repo is public, `Casks/fred.rb` in lingrino/homebrew-tap; without them
   it keeps the ad-hoc zip as a run artifact only.
-- Secrets come from Terraform in lingrino/infra: `HOMEBREW_TAP_GITHUB_TOKEN`, and from
-  AWS Secrets Manager `github/keys/fred`: `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`
-  (Developer ID Application certificate), `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`,
-  `APPLE_API_ISSUER_ID` (App Store Connect API key for notarytool). The user puts them
-  there with `scripts/store-release-secrets.sh <.p12> <AuthKey_ID.p8> <issuer>`: it asks
-  for the .p12 password, checks the identity imports and notarytool accepts the key, then
-  writes the JSON. Rerun it with a new certificate before the current one expires (the
-  first: 2027-12-16); releases already signed and notarized keep working after that.
+- Secrets come from Terraform in lingrino/infra (`secrets_github.tf`, `local.mac_app_repos`:
+  every Mac app the maintainer releases this way gets the same ones):
+  `HOMEBREW_TAP_GITHUB_TOKEN`, and from AWS Secrets Manager `github/keys/apple-developer`:
+  `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD` (Developer ID Application certificate),
+  `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` (App Store Connect
+  API key for notarytool). Both belong to the team, not to Fred. The user puts them there
+  with `scripts/store-release-secrets.sh <.p12> <AuthKey_ID.p8> <issuer>`: it asks for the
+  .p12 password, checks the identity imports and notarytool accepts the key, then writes
+  the JSON; repos get it on infra's next apply (its terraform workflow, or the Monday run).
+  Rerun it with a new certificate before the current one expires (the first: 2027-12-16);
+  releases already signed and notarized keep working after that.
 - Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
   Fred once its executable is a different file.
@@ -126,14 +129,17 @@ Toolchain (Xcode 27 is active on this Mac since 2026-11, and in CI):
   not being found (test builds get `-plugin-path`). Check that branch with
   `DEVELOPER_DIR=/Library/Developer/CommandLineTools scripts/swift.sh test --scratch-path <dir>`.
 - Local builds are signed with the same Developer ID as releases (no timestamp, not
-  notarized), from a dedicated keychain that `scripts/setup-signing.sh` fills from
-  `github/keys/fred` (password in `~/Library/Application Support/FredDev/`; `make` checks
-  it with `--check`). Every Developer ID signature has the same designated requirement
-  (bundle id + team ID), so the user's privacy grants carry across `brew upgrade` and
-  `make install` and survive certificate renewals. The user's Mac installs the cask like
-  the others; `make install` replaces it with a local build (control socket included)
-  until the next `brew upgrade`. Never switch local builds to ad-hoc or another identity,
-  or change the bundle id `dev.fred.Fred`: that means granting every permission again.
+  notarized), from a dedicated keychain (`~/Library/Keychains/developer-id.keychain-db`,
+  password in `~/Library/Application Support/DeveloperID/`) that `scripts/setup-signing.sh`
+  fills from `github/keys/apple-developer`; `make` checks it with `--check`. The
+  maintainer's other Mac apps use the same keychain (a copy of the script with the same
+  paths), so it is set up once per Mac. Every Developer ID signature has the same
+  designated requirement (bundle id + team ID), so the user's privacy grants carry across
+  `brew upgrade` and `make install` and survive certificate renewals. The user's Mac
+  installs the cask like the others; `make install` replaces it with a local build
+  (control socket included) until the next `brew upgrade`. Never switch local builds to
+  ad-hoc or another identity, or change the bundle id `dev.fred.Fred`: that means granting
+  every permission again.
 
 ## Privacy grants (user-only; check with `fredctl permissions`)
 
@@ -323,9 +329,9 @@ grants, hotkeys, known queries); `fredbench scan` shows what each source finds.
 - Toolchain: the CLT workarounds (`scripts/swift.sh`, only when the CLT is active), new
   compiler diagnostics (`make lint`), the CI runner label (`xcode-27`: move to the next
   Xcode major's label when GitHub ships it) and the workflows' `DEVELOPER_DIR` (keep it on
-  the local Xcode; the image's readme lists what's installed). Signing: losing the Fred
+  the local Xcode; the image's readme lists what's installed). Signing: losing the signing
   keychain or its password just means `scripts/setup-signing.sh` again; a renewed
-  certificate goes through `store-release-secrets.sh`, then `setup-signing.sh`.
+  certificate goes through `store-release-secrets.sh`, an infra apply, then `setup-signing.sh`.
 
 ## Open decisions
 

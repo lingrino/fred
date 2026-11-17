@@ -1,6 +1,8 @@
 #!/bin/bash
 # Stores the Apple release credentials where CI gets them: AWS Secrets Manager
-# github/keys/fred (prod account), which lingrino/infra copies into fred's Actions secrets.
+# github/keys/apple-developer (prod account). They belong to the team, so lingrino/infra
+# copies them into the Actions secrets of every Mac app it lists (local.mac_app_repos) on
+# its next apply, and setup-signing.sh imports them for local builds.
 #   scripts/store-release-secrets.sh <DeveloperID.p12> <AuthKey_KEYID.p8> <issuer-id>
 #
 # The .p12 is the "Developer ID Application" certificate with its private key (Keychain
@@ -21,7 +23,7 @@ KEY_ID="${FRED_API_KEY_ID:-$(basename "$P8" .p8 | sed -n 's/^AuthKey_//p')}"
 [[ -n "$KEY_ID" ]] || { echo "no key id in the name $(basename "$P8"); set FRED_API_KEY_ID" >&2; exit 1; }
 PROFILE="${AWS_PROFILE:-prod}"
 REGION=us-west-2
-SECRET=github/keys/fred
+SECRET=github/keys/apple-developer
 
 TMP="$(mktemp -d)"
 chmod 700 "$TMP"
@@ -55,3 +57,5 @@ printf '%s' "$PW" | jq -Rs --rawfile p12 "$TMP/p12" --rawfile p8 "$TMP/p8" --arg
 version="$(aws secretsmanager put-secret-value --profile "$PROFILE" --region "$REGION" \
   --secret-id "$SECRET" --secret-string "file://$TMP/secret.json" --query VersionId --output text)"
 echo "stored $SECRET (version $version)"
+echo "next: apply lingrino/infra (terraform workflow, or wait for its Monday run) so the repos get"
+echo "it, then scripts/setup-signing.sh on each Mac that builds locally"
