@@ -2,9 +2,9 @@ import Foundation
 import os
 
 /// Unified logging. Read with:
-///   /usr/bin/log stream --predicate 'subsystem == "dev.fred.Fred"' --level info
+///   /usr/bin/log stream --predicate 'subsystem == "com.lingrino.fred"' --level info
 enum Log {
-    static let logger = Logger(subsystem: "dev.fred.Fred", category: "fred")
+    static let logger = Logger(subsystem: "com.lingrino.fred", category: "fred")
     static func info(_ s: String) { logger.notice("\(s, privacy: .public)") }
     static func error(_ s: String) { logger.error("\(s, privacy: .public)") }
 }
