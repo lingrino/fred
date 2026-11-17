@@ -44,7 +44,7 @@ if [[ "$CONFIG" == "release" ]]; then
 fi
 
 sign=(codesign --force --options runtime --entitlements "$ROOT/Resources/Fred.entitlements"
-      --identifier dev.fred.Fred)
+      --identifier com.lingrino.fred)
 case "${FRED_SIGN_IDENTITY:-}" in
   "")
     /usr/libexec/PlistBuddy -c "Add :FredDevTools bool true" "$PLIST"

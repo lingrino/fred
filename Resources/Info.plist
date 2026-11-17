@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>Fred</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.fred.Fred</string>
+	<string>com.lingrino.fred</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

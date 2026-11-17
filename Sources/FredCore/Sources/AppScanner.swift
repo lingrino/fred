@@ -31,7 +31,7 @@ public enum AppScanner {
     public static let extras = ["/System/Library/CoreServices/Finder.app"]
 
     /// Fred doesn't list itself (it has Quit/Restart Fred commands instead).
-    public static let ownBundleID = "dev.fred.Fred"
+    public static let ownBundleID = "com.lingrino.fred"
 
     public struct App: Sendable, Equatable {
         public var path: String

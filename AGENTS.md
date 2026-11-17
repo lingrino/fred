@@ -12,9 +12,14 @@ when there is no CLAUDE.md, so don't add one: a CLAUDE.md here would shadow this
 
 Development is at a slow pace since 2026-11-15: features are done, Fred is in daily use.
 To pick it up again:
-1. Read this file, `git log --oneline -20`, and the memory notes. Check "Open decisions".
+1. Read this file, `git log --oneline -20`, and the memory notes if this Mac has any
+   (they are local to one Mac and may be gone: everything durable is in this file).
+   Check "Open decisions".
 2. `sw_vers; swift --version`: if macOS, Xcode or the Command Line Tools changed, read
-   "What OS/toolchain updates can break" below before anything else.
+   "What OS/toolchain updates can break" below before anything else. On a new Mac: Xcode
+   27.2 (or whatever CI's `DEVELOPER_DIR` says), the user's dotfiles (`dot`, which also
+   installs the Fred cask), then `scripts/setup-signing.sh` (AWS SSO login). The user
+   grants the privacy permissions once: the cask and `make install` builds share them.
 3. `make install`, then `make check` (zero-warning build, unit tests, live smoke test
    against the installed app; no focus stealing). The install matters: a brew release
    has no control socket, so smoke can't reach it. Fix what it reports before new work.
@@ -57,6 +62,8 @@ To pick it up again:
 - Clipboard pick pastes into the front app. Contact pick shows a card in Fred.
 - macOS 27.2 is the minimum OS forever; high-end Apple Silicon only. Use RAM/cores freely.
 - Stop and ask the user only for one-way doors or things only they can do (privacy grants).
+- Bundle id `com.lingrino.fred` since 2026-11-16 (was `dev.fred.Fred`; the switch meant
+  granting every permission again, before Fred went on the user's other Macs).
 
 ## Build, run, test
 
@@ -120,6 +127,12 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
   Fred once its executable is a different file.
 - Renovate keeps action versions current (`renovate.json`).
+- The user's Macs install Fred through their dotfiles (lingrino/dotfiles):
+  `cask 'lingrino/tap/fred'` in `home/exact_private_dot_config/private_homebrew/Brewfile_*`
+  (personal, mini, work). Their `dot` (chezmoi update) runs `brew bundle cleanup --force
+  --zap` and `brew upgrade`: a merge to main reaches each Mac on its next `dot`, and a cask
+  missing from that Mac's Brewfile is uninstalled and its zap trashes
+  `~/Library/Application Support/Fred` (it happened 2026-11-16; the user put it back).
 
 Toolchain (Xcode 27 is active on this Mac since 2026-11, and in CI):
 - `scripts/swift.sh` wraps `swift`. With Xcode active it is plain `swift`. With only the
@@ -138,8 +151,8 @@ Toolchain (Xcode 27 is active on this Mac since 2026-11, and in CI):
   `brew upgrade` and `make install` and survive certificate renewals. The user's Mac
   installs the cask like the others; `make install` replaces it with a local build
   (control socket included) until the next `brew upgrade`. Never switch local builds to
-  ad-hoc or another identity, or change the bundle id `dev.fred.Fred`: that means granting
-  every permission again.
+  ad-hoc or another identity, or change the bundle id `com.lingrino.fred`: that means
+  granting every permission again.
 
 ## Privacy grants (user-only; check with `fredctl permissions`)
 
@@ -306,7 +319,11 @@ Measure in production mode (`make install`) for hotkey latency; close the panel 
   apps (Safari, Finder, System Settings…) are fine.
   Push only branches for PRs (main takes PRs only; never `git push --all`/`--mirror`);
   other refs in this clone (e.g.
-  `refs/codex/…` checkpoints) are local tool state.
+  `refs/codex/…` checkpoints) are local tool state. Commits and PR bodies carry no
+  agent attribution (no `Co-Authored-By` trailer): the user authors them.
+- Don't drive other apps with `osascript` (`tell application …`): it raises an Automation
+  prompt for the agent's terminal, and only the user answers privacy prompts. Quit apps
+  with `pkill -x`; check state with `pgrep`, `fredctl` or screenshots.
 
 - Never execute Sleep/Restart/Shut Down/Lock/Empty Trash/Force Quit for testing — use
   `fredctl dryrun on` or launch with `FRED_DRY_RUN=1`.
