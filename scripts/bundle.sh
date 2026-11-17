@@ -21,7 +21,7 @@ CONFIG="$1"
 OUT="$2"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/.build/$CONFIG/Fred"
-KC="$HOME/Library/Keychains/developer-id.keychain-db"   # setup-signing.sh
+KC="$HOME/Library/Keychains/developer-id.keychain-db"   # setup-signing.sh (same paths)
 PASS_FILE="$HOME/Library/Application Support/DeveloperID/keychain-password"
 
 rm -rf "$OUT"

@@ -18,9 +18,11 @@
 #
 # Also installs Apple's Developer ID G2 intermediate into the login keychain when it's
 # missing (pinned by hash): codesign builds the embedded chain from the keychain search
-# list. Run it again after renewing the certificate (the old one is replaced).
+# list. Every run (re)imports the identity, replacing the old one: run it again after
+# renewing the certificate.
 set -euo pipefail
 
+# Keep these paths in sync with the other apps' copies of this script (and bundle.sh).
 DEV_DIR="$HOME/Library/Application Support/DeveloperID"
 KC="$HOME/Library/Keychains/developer-id.keychain-db"
 PASS_FILE="$DEV_DIR/keychain-password"
@@ -35,7 +37,7 @@ have_g2() {   # the G2 "Developer ID Certification Authority" in the login or Sy
   [[ -n "$pems" ]] && openssl crl2pkcs7 -nocrl -certfile <(printf '%s\n' "$pems") \
     | openssl pkcs7 -print_certs -noout | grep -q "OU=G2"
 }
-identity() {   # SHA-1 of the valid Developer ID identity in the Fred keychain, if any
+identity() {   # SHA-1 of the valid Developer ID identity in the signing keychain, if any
   [[ -f "$KC" ]] && security find-identity -v -p codesigning "$KC" 2>/dev/null \
     | awk '/"Developer ID Application: / { print $2; exit }'
 }
@@ -48,7 +50,8 @@ fi
 
 TMP="$(mktemp -d)"
 chmod 700 "$TMP"
-trap 'rm -rf "$TMP"' EXIT
+CHECK_KC="$TMP/check.keychain-db"
+trap 'security delete-keychain "$CHECK_KC" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 if ! have_g2; then
   curl -fsSL "$G2_URL" -o "$TMP/g2.cer"
@@ -83,9 +86,15 @@ else
   aws sts get-caller-identity --profile "$PROFILE" >/dev/null 2>&1 || aws sso login --profile "$PROFILE"
   aws secretsmanager get-secret-value --profile "$PROFILE" --region us-west-2 \
     --secret-id github/keys/apple-developer --query SecretString --output text > "$TMP/secret.json"
-  jq -r .APPLE_CERT_P12_BASE64 "$TMP/secret.json" | base64 --decode > "$TMP/id.p12"
-  P12PW="$(jq -r .APPLE_CERT_PASSWORD "$TMP/secret.json")"
+  jq -er .APPLE_CERT_P12_BASE64 "$TMP/secret.json" | base64 --decode > "$TMP/id.p12"
+  P12PW="$(jq -er .APPLE_CERT_PASSWORD "$TMP/secret.json")"
 fi
+# Import into a scratch keychain first: a wrong password or a bad secret must not leave the
+# shared keychain without an identity.
+security create-keychain -p "$(openssl rand -hex 16)" "$CHECK_KC"
+security import "$TMP/id.p12" -k "$CHECK_KC" -P "$P12PW" >/dev/null \
+  || { echo "can't import the .p12 (wrong password, or a bad secret)" >&2; exit 1; }
+security delete-keychain "$CHECK_KC"
 # Replace any older Developer ID identity, so exactly one is there to sign with.
 while security delete-identity -c "Developer ID Application" "$KC" >/dev/null 2>&1; do :; done
 security import "$TMP/id.p12" -k "$KC" -P "$P12PW" -T /usr/bin/codesign >/dev/null
