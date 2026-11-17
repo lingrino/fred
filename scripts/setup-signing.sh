@@ -1,9 +1,12 @@
 #!/bin/bash
 # Puts the Developer ID signing identity where local builds use it: a dedicated keychain
-# (~/Library/Keychains/fred-signing.keychain-db) whose generated password is kept in
-# ~/Library/Application Support/FredDev/, so codesign never prompts.
-#   scripts/setup-signing.sh            import it from AWS Secrets Manager github/keys/fred
-#                                       (SSO profile `prod`, or AWS_PROFILE)
+# (~/Library/Keychains/developer-id.keychain-db) whose generated password is kept in
+# ~/Library/Application Support/DeveloperID/, so codesign never prompts. The certificate
+# belongs to the team, not to Fred: the maintainer's other Mac apps carry a copy of this
+# script with the same paths, so whichever runs first sets up the Mac for all of them.
+#   scripts/setup-signing.sh            import it from AWS Secrets Manager
+#                                       github/keys/apple-developer (SSO profile `prod`,
+#                                       or AWS_PROFILE)
 #   scripts/setup-signing.sh <id.p12>   import it from an exported .p12 (asks for its password)
 #   scripts/setup-signing.sh --check    exit 1 with instructions if anything is missing
 #
@@ -18,8 +21,8 @@
 # list. Run it again after renewing the certificate (the old one is replaced).
 set -euo pipefail
 
-DEV_DIR="$HOME/Library/Application Support/FredDev"
-KC="$HOME/Library/Keychains/fred-signing.keychain-db"
+DEV_DIR="$HOME/Library/Application Support/DeveloperID"
+KC="$HOME/Library/Keychains/developer-id.keychain-db"
 PASS_FILE="$DEV_DIR/keychain-password"
 LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
 G2_URL=https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
@@ -70,24 +73,23 @@ fi
 PASS="$(cat "$PASS_FILE")"
 security unlock-keychain -p "$PASS" "$KC"
 
-if [[ -z "$(identity)" || $# -gt 0 ]]; then
-  if [[ $# -gt 0 ]]; then
-    cp "$1" "$TMP/id.p12"
-    read -rsp "password of $(basename "$1"): " P12PW
-    echo
-  else
-    PROFILE="${AWS_PROFILE:-prod}"
-    aws sts get-caller-identity --profile "$PROFILE" >/dev/null 2>&1 || aws sso login --profile "$PROFILE"
-    aws secretsmanager get-secret-value --profile "$PROFILE" --region us-west-2 \
-      --secret-id github/keys/fred --query SecretString --output text > "$TMP/secret.json"
-    jq -r .APPLE_CERT_P12_BASE64 "$TMP/secret.json" | base64 --decode > "$TMP/id.p12"
-    P12PW="$(jq -r .APPLE_CERT_PASSWORD "$TMP/secret.json")"
-  fi
-  # Replace any older Developer ID identity, so exactly one is there to sign with.
-  while security delete-identity -c "Developer ID Application" "$KC" >/dev/null 2>&1; do :; done
-  security import "$TMP/id.p12" -k "$KC" -P "$P12PW" -T /usr/bin/codesign >/dev/null
-  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASS" "$KC" >/dev/null
+# Always (re)import, so a renewed certificate replaces one that is still valid.
+if [[ $# -gt 0 ]]; then
+  cp "$1" "$TMP/id.p12"
+  read -rsp "password of $(basename "$1"): " P12PW
+  echo
+else
+  PROFILE="${AWS_PROFILE:-prod}"
+  aws sts get-caller-identity --profile "$PROFILE" >/dev/null 2>&1 || aws sso login --profile "$PROFILE"
+  aws secretsmanager get-secret-value --profile "$PROFILE" --region us-west-2 \
+    --secret-id github/keys/apple-developer --query SecretString --output text > "$TMP/secret.json"
+  jq -r .APPLE_CERT_P12_BASE64 "$TMP/secret.json" | base64 --decode > "$TMP/id.p12"
+  P12PW="$(jq -r .APPLE_CERT_PASSWORD "$TMP/secret.json")"
 fi
+# Replace any older Developer ID identity, so exactly one is there to sign with.
+while security delete-identity -c "Developer ID Application" "$KC" >/dev/null 2>&1; do :; done
+security import "$TMP/id.p12" -k "$KC" -P "$P12PW" -T /usr/bin/codesign >/dev/null
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASS" "$KC" >/dev/null
 
 id="$(identity)"
 [[ -n "$id" ]] || { echo "no valid Developer ID Application identity in $KC" >&2; exit 1; }

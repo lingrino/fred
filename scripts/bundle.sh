@@ -6,7 +6,7 @@
 # N); CFBundleVersion is N, FredRevision the short git hash. FRED_VERSION overrides.
 #
 # Signing identity, FRED_SIGN_IDENTITY:
-#   unset  the Developer ID from Fred's own keychain (setup-signing.sh), no timestamp:
+#   unset  the Developer ID from the signing keychain (setup-signing.sh), no timestamp:
 #          the same designated requirement as releases, so privacy grants carry across
 #          brew-installed releases and local builds
 #   "-"    ad-hoc: CI checks that build and verify the bundle but never install it
@@ -21,8 +21,8 @@ CONFIG="$1"
 OUT="$2"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/.build/$CONFIG/Fred"
-KC="$HOME/Library/Keychains/fred-signing.keychain-db"
-PASS_FILE="$HOME/Library/Application Support/FredDev/keychain-password"
+KC="$HOME/Library/Keychains/developer-id.keychain-db"   # setup-signing.sh
+PASS_FILE="$HOME/Library/Application Support/DeveloperID/keychain-password"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
