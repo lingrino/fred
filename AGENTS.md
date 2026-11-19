@@ -105,7 +105,6 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   deployment target), so both workflows set `DEVELOPER_DIR` to the Xcode this Mac uses
   (27.2). `make smoke` and the on-screen checks need the installed app and its
   grants, so they stay local: `make check` before opening a PR.
-- `review`: Claude reviews each PR (anthropics/claude-code-action).
 - `release`, on every push to main: version 0.0.N, N = commits on main (squash merges, so
   every merge bumps it; `scripts/bundle.sh` stamps it into the bundle with the git hash
   as `FredRevision`). `scripts/release.sh` builds, signs, notarizes (API key), staples,
