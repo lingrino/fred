@@ -124,10 +124,7 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
   releases already signed and notarized keep working after that.
 - Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
-  Fred once its executable is a different file. The cask's `postflight_steps` clears the
-  quarantine flag brew puts on each copy (`scripts/release.sh`): notarization doesn't skip
-  macOS's first-launch "downloaded from the Internet" prompt, and without this every
-  upgrade's self-restart waited on that click (user's choice, 2026-11-16).
+  Fred once its executable is a different file.
 - Renovate keeps action versions current (`renovate.json`).
 - The user's Macs install Fred through their dotfiles (lingrino/dotfiles):
   `cask 'lingrino/tap/fred'` in `home/exact_private_dot_config/private_homebrew/Brewfile_*`

@@ -42,10 +42,6 @@ SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
 # would start Fred again afterwards. Fred restarts itself when its bundle is replaced
 # (AppDelegate.selfChanged), so upgrades just work; `brew uninstall` leaves a running Fred
 # until it is quit ("Quit Fred"). The macOS minimum is LSMinimumSystemVersion's job.
-# postflight clears the quarantine flag brew puts on every copy it installs: otherwise
-# macOS asks "downloaded from the Internet… open it?" on the first launch of each upgrade,
-# and Fred's self-restart waits on that click (no launcher meanwhile). brew's sha256 check
-# still pins the bits to the zip CI notarized; the user chose this on 2026-11-16.
 cat > "$OUT/fred.rb" <<EOF
 cask "fred" do
   version "$VERSION"
@@ -59,10 +55,6 @@ cask "fred" do
   depends_on arch: :arm64
 
   app "Fred.app"
-
-  postflight_steps do
-    run "/usr/bin/xattr", args: ["-d", "-r", "com.apple.quarantine", "{{appdir}}/Fred.app"]
-  end
 
   zap trash: "~/Library/Application Support/Fred"
 end
