@@ -126,11 +126,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Not latency-relevant: after the first run-loop turn.
         DispatchQueue.main.async {
+            CrashRelaunch.arm()
             LoginItem.ensureRegistered()
             Permissions.requestMissing()
             Log.info(Permissions.report())
         }
         DispatchQueue.global(qos: .utility).async { Converter.warm() }
+    }
+
+    /// Every `NSApp.terminate` (Quit Fred, Restart Fred, an upgrade, logout) ends here.
+    func applicationWillTerminate(_ notification: Notification) {
+        CrashRelaunch.disarm()
     }
 }
 

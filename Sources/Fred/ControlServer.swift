@@ -107,6 +107,7 @@ final class ControlServer: @unchecked Sendable {
             memory: \(residentMB()) MB resident
             login item: \(LoginItem.statusLine)
             hotkeys: launcher \(HotKeys.status.first ?? "-"), clipboard \(HotKeys.status.dropFirst().first ?? "-")
+            crash relaunch: \(CrashRelaunch.status)\(CrashRelaunch.lastCrash.map { "; started after a crash \(Int(Date().timeIntervalSince1970) - $0) s ago" } ?? "")
             """
         case "permissions": return Permissions.report()
         case "request": Permissions.requestMissing(); return Permissions.report()

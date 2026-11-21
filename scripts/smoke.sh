@@ -25,6 +25,7 @@ missing=$($CTL permissions | grep -v ": granted$")
 stats=$($CTL stats)
 grep -q "hotkeys: launcher registered, clipboard registered" <<<"$stats" && ok || bad "hotkeys: $(grep hotkeys <<<"$stats")"
 grep -q "login item: enabled" <<<"$stats" && ok || bad "$(grep 'login item' <<<"$stats")"
+grep -q "^crash relaunch: armed" <<<"$stats" && ok || bad "$(grep 'crash relaunch' <<<"$stats")"
 
 # Every title is pre-rendered (a title that misses the atlas rasterizes per keystroke).
 read -r tin tall <<<"$(sed -nE 's/.*titles: ([0-9]+) of ([0-9]+),.*/\1 \2/p' <<<"$stats")"

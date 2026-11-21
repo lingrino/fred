@@ -33,7 +33,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         (.loginwindow, "Automation → loginwindow", "Sleep, Restart, Shut Down", "Privacy_Automation"),
     ]
 
-    static let statusKeys = ["Hotkeys", "Login item", "Index", "Clipboard", "Uptime",
+    static let statusKeys = ["Hotkeys", "Login item", "After a crash", "Index", "Clipboard", "Uptime",
                              "CPU", "Memory", "Keystroke → frame", "⌘Space → frame", "Search + rows"]
 
     var isOpen: Bool { window?.isVisible ?? false }
@@ -185,6 +185,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         for k in c.kinds { kinds[Int(k.rawValue)] += 1 }
         set("Hotkeys", "⌘Space \(HotKeys.status.first ?? "-") · ⌘⇧C \(HotKeys.status.dropFirst().first ?? "-")")
         set("Login item", LoginItem.statusLine)
+        set("After a crash", CrashRelaunch.status == "armed" ? "Fred restarts itself" : "stays down (\(CrashRelaunch.status.dropFirst(5)))")
         set("Index", "\(kinds[0]) apps · \(kinds[1]) settings · \(kinds[3]) bookmarks · \(kinds[4]) contacts")
         set("Clipboard", app.clipboard?.store.stats ?? "—")
         let up = Int(Date().timeIntervalSince(app.launchedAt))

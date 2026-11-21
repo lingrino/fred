@@ -125,6 +125,21 @@ scripts/fredctl …  # talk to the running app (see "Control socket")
 - Upgrades: `brew upgrade` swaps /Applications/Fred.app under the running process; the
   Indexer's FSEvents see Fred's own bundle change and `AppDelegate.selfChanged` restarts
   Fred once its executable is a different file.
+- Crashes: Fred comes back by itself (`CrashRelaunch`, since 0.0.50; before that a crash
+  left the hotkeys dead until someone noticed, as on 2026-11-21). Each Fred keeps one
+  child, `/bin/sh` blocked on a pipe: "quit" on it (every `NSApp.terminate`, and SIGTERM,
+  which Fred now handles off main) ends the child; end-of-file without it (a trap,
+  kill -9, a memory kill) makes the child `open` the bundle again, ~0.2 s later. So
+  `pkill -x Fred`, Quit Fred and logout still leave Fred stopped, and a force quit does
+  not. The crash times ride along as `--crashed t1,t2,…`; after 3 crashes within 10
+  minutes (`RelaunchPolicy`) the next Fred doesn't arm and the following crash is final.
+  State: `fredctl stats` → "crash relaunch", Fred Settings → "After a crash"; smoke
+  expects "armed". Not a launchd agent with KeepAlive (considered 2026-11-21): every start
+  would have to go through launchd or run unsupervised, it is one more Login Items entry
+  to allow on every Mac, and it starts Fred outside LaunchServices, untried with the
+  privacy grants. To test: `kill -KILL $(pgrep -x Fred)` (no crash report; `-SEGV` writes
+  one to ~/Library/Logs/DiagnosticReports: delete it afterwards), then `fredctl stats`;
+  a fourth kill within 10 minutes must stay down (`open /Applications/Fred.app` after).
 - Renovate keeps action versions current (`renovate.json`).
 - The user's Macs install Fred through their dotfiles (lingrino/dotfiles):
   `cask 'lingrino/tap/fred'` in `home/exact_private_dot_config/private_homebrew/Brewfile_*`
@@ -183,6 +198,7 @@ Sources/FredCore/          pure logic, no AppKit — unit-tested, benchmarked
   ClipStore.swift          clipboard history SoA + append-only log + images dir + search
   AppendFile.swift         the logs' write side (O_APPEND, 0600, torn-write cut-off, foreign files moved aside)
   Disjoint.swift           @unchecked Sendable box for concurrentPerform buffers (disjoint writes)
+  RelaunchPolicy.swift     when to stop relaunching after crashes (3 within 10 minutes)
   Sources/*.swift          AppScanner, SettingsScanner, Commands, ChromeBookmarks (Foundation only)
 Sources/Fred/              the app
   main.swift               FredApplication (fast key dispatch to QueryField), single-instance lock, entry point
@@ -199,6 +215,7 @@ Sources/Fred/              the app
   UI/Launcher.swift        launcher controller: keystroke → search → rows, keys, modes, actions, latency stats
   ClipboardController.swift pasteboard polling, clipboard panel + preview, paste
   Actions.swift            open, system commands (loginwindow AEs, lock, Finder), ⌘V posting
+  CrashRelaunch.swift      the child that reopens Fred after a crash; SIGTERM as a clean exit
   SettingsWindow.swift     "Fred Settings" health window (AppKit, plain NSWindow)
   LiveTests.swift          on-screen checks via posted key events: hotkeybench, typing, ⌘, (user idle only)
   Snapshot.swift           offscreen PNG of a view's layer tree (fredctl snapshot/card/settings)
