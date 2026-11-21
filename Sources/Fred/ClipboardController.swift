@@ -443,7 +443,22 @@ final class ClipboardController: NSObject, QueryFieldDelegate {
                 refresh()
                 return Snapshot.write(view: panel.content, to: bits[0])
             }
-        default: return "clip: search <q> | forget <q> | show | pick <n> | snapshot <png> [q]"
+        case "hover":
+            // hover <n>: mouse-moved over row n of the parked panel, as the list's tracking
+            // area gets it there too; it must select nothing (smoke). Two points, so one
+            // of them is real movement whatever the pointer did before.
+            guard parts.count > 1, let n = Int(parts[1]), n >= 0, n < ClipTheme.visibleRows else { return "usage: clip hover <row>" }
+            guard !panel.shown else { return "busy: the panel is on screen" }
+            let before = list.selected
+            for x in [20.0, 60.0] {
+                let p = list.convert(NSPoint(x: x, y: (CGFloat(n) + 0.5) * ClipTheme.rowHeight), to: nil)
+                guard let e = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)
+                else { return "no event" }
+                list.mouseMoved(with: e)
+            }
+            return "row \(before) → \(list.selected)"
+        default: return "clip: search <q> | forget <q> | show | pick <n> | hover <n> | snapshot <png> [q]"
         }
     }
 }
@@ -545,7 +560,8 @@ final class ClipPreview: FlippedView {
             meta.stringValue = [store.text(i), app, df.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
         case .files where Self.singleImageFile(store.text(i)) != nil:
             // A copied image file (e.g. a screenshot from Finder or a screenshot tool): show it.
-            let path = Self.singleImageFile(store.text(i))!
+            // (Not a second `singleImageFile(…)!`: the file can vanish between the two checks.)
+            let path = store.text(i)
             scroll.isHidden = true
             imageView.isHidden = false
             imageView.image = NSImage(contentsOfFile: path)

@@ -78,6 +78,10 @@ $CTL settings "$tmp/s.png" >/dev/null
 $CTL clip snapshot "$tmp/c.png" >/dev/null
 [[ $(stat -f %z "$tmp/c.png" 2>/dev/null || echo 0) -gt 10000 ]] && ok || bad "clipboard snapshot empty"
 
+# A parked panel still gets mouse-moved; its rows must not react (0.0.48 crashed there).
+hover=$($CTL clip hover 1)
+[[ "$hover" == "row 0 → 0" ]] && ok || bad "parked clipboard list under the mouse: $hover"
+
 # Latency is reported, not judged (it depends on what the machine is doing).
 grep -E "keystroke→committed|hotkey→committed" <<<"$stats" | sed 's/^/  /'
 echo "smoke: $pass passed, $fail failed"

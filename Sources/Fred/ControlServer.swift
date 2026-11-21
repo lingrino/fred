@@ -205,7 +205,7 @@ final class ControlServer: @unchecked Sendable {
             commands: stats resetstats permissions request query <q> show hide type <q> key down|up|esc
               snapshot <png> [q] card <png> <q> animcheck <q1>|<q2> settings [png] learn reindex
               dryrun on|off shadow on|off hotkeybench [n] live [run]
-              clip search <q>|forget <q>|show|pick <n>|snapshot <png> [q]
+              clip search <q>|forget <q>|show|pick <n>|hover <n>|snapshot <png> [q]
             """
         }
     }

@@ -102,6 +102,11 @@ final class ResultList: FlippedView {
     //
     // Only real pointer movement selects a row: rows changing under a still pointer
     // (typing) don't move the selection, and sub-2-pt jitter is ignored.
+    //
+    // A parked panel still gets mouse-moved: it stays ordered in, and `ignoresMouseEvents`
+    // stops clicks, not tracking areas. There the pointer is only followed (so the jitter
+    // rule holds on the next show), never acted on: nobody sees those rows, and what
+    // their owner knows about them is stale (0.0.48 crashed on a pruned clip that way).
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -115,7 +120,7 @@ final class ResultList: FlippedView {
         let p = convert(event.locationInWindow, from: nil)
         if let last = lastMouse, abs(p.x - last.x) < 2, abs(p.y - last.y) < 2 { return }
         lastMouse = p
-        guard let i = row(at: p), i != selected else { return }
+        guard (window as? FloatingPanel)?.shown == true, let i = row(at: p), i != selected else { return }
         select(i)
         onHover?(i)
     }
