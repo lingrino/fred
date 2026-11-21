@@ -70,6 +70,9 @@ class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { shown }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Parked, the rows behind ⌘1…⌘9, ⌘⌫ and ⌘↩ are stale: never act on them, should
+        // AppKit ever offer a key equivalent to a window that isn't key.
+        guard shown else { return false }
         if let h = keyHandler, h(event) { return true }
         if Self.editingKeyEquivalent(event) { return true }
         return super.performKeyEquivalent(with: event)

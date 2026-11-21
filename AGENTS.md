@@ -253,6 +253,15 @@ sparsely) → `ResultList.set` — synchronous, same run-loop turn.
 - Anything that indexes a catalog or clip list across time must survive a swap: rows keep
   item keys (resolve with `Catalog.item(forKey:)`), the clipboard list re-resolves by hash
   and refreshes on every store change while shown.
+- A parked panel is not inert: it is ordered in, and tracking areas keep delivering
+  mouse-moved to it (`ignoresMouseEvents` only stops clicks). Whatever a panel holds while
+  parked is stale (the clipboard list's indices are not refreshed then), so handlers of
+  events that can arrive while parked check `panel.shown` first (`ResultList.mouseMoved`;
+  `FloatingPanel.performKeyEquivalent` as a precaution: AppKit was only seen offering key
+  equivalents to the key window).
+  0.0.48 crashed on 2026-11-21 (index out of range) when the hourly prune had dropped
+  clips and the pointer then crossed the parked clipboard list; smoke covers it
+  (`fredctl clip hover`).
 - Logs (learning, clipboard) truncate a torn tail before appending; never append after an
   unparsed tail (`AppendFile`: O_APPEND, a failed write is cut back off).
 - The query field holds at most 256 UTF-16 units: it typesets and rasterizes its whole
@@ -293,7 +302,8 @@ focus; with a path: render it offscreen),
 `snapshot <png> [q]` (renders the content layer tree offscreen — no glass — and
 doesn't steal focus), `card <png> <q>`, `type <q>`/`show`/`hide`/`key down|up|esc`
 (visible UI — **don't use while the user is active**, it takes keyboard focus), `shadow`,
-`learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>`,
+`learn`, `reindex`, `dryrun on|off`, `clip search|show|pick <n>|snapshot|forget <q>|hover <n>`
+(`hover`: a mouse-moved over row n of the parked clipboard list, which must ignore it),
 `animcheck <q1>|<q2>` (implicit animations on layers; alpha-0 panel, no focus).
 On screen, **user idle only** (Fred posts real key events into its own panel; aborts if
 the panel isn't key, so nothing reaches another app): `hotkeybench <n>` (n × ⌘Space →
